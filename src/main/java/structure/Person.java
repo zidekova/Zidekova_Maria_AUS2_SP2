@@ -1,4 +1,4 @@
-package model;
+package structure;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -6,6 +6,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 
 public class Person implements Record<Person> {
+    // fixed field sizes in bytes
     private static final int NAME_SIZE = 15;
     private static final int SURNAME_SIZE = 14;
     private static final int DATE_OF_BIRTH_SIZE = 10;
@@ -25,6 +26,9 @@ public class Person implements Record<Person> {
         this.id = id;
     }
 
+    /**
+     * Two people are equal if they have the same non-null ID
+     */
     @Override
     public boolean equals(Object other) {
         if (this == other) return true;
@@ -35,23 +39,32 @@ public class Person implements Record<Person> {
         return this.id.equals(person.id);
     }
 
+    /**
+     * Returns the size of this record in bytes
+     */
     @Override
     public int getSize() {
         return NAME_SIZE + SURNAME_SIZE + DATE_OF_BIRTH_SIZE + ID_SIZE;
     }
 
+    /**
+     * Serializes a person to a byte array with fixed-size fields
+     */
     @Override
     public byte[] getBytes() {
         ByteBuffer buffer = ByteBuffer.allocate(getSize());
 
-        putFixedString(buffer, name, NAME_SIZE);
-        putFixedString(buffer, surname, SURNAME_SIZE);
-        putFixedString(buffer, dateOfBirth != null ? dateOfBirth.toString() : "1900-01-01", DATE_OF_BIRTH_SIZE);
-        putFixedString(buffer, id, ID_SIZE);
+        this.putFixedString(buffer, this.name, NAME_SIZE);
+        this.putFixedString(buffer, this.surname, SURNAME_SIZE);
+        this.putFixedString(buffer, this.dateOfBirth != null ? this.dateOfBirth.toString() : "1900-01-01", DATE_OF_BIRTH_SIZE);
+        this.putFixedString(buffer, this.id, ID_SIZE);
 
         return buffer.array();
     }
 
+    /**
+     * Deserializes a person from byte array
+     */
     @Override
     public void fromBytes(byte[] data) {
         if (data == null || data.length != getSize()) {
@@ -59,12 +72,13 @@ public class Person implements Record<Person> {
             return;
         }
 
+        // wrap data in buffer for reading
         ByteBuffer buffer = ByteBuffer.wrap(data);
 
-        this.name = getFixedString(buffer, NAME_SIZE);
-        this.surname = getFixedString(buffer, SURNAME_SIZE);
+        this.name = this.getFixedString(buffer, NAME_SIZE);
+        this.surname = this.getFixedString(buffer, SURNAME_SIZE);
 
-        String dateStr = getFixedString(buffer, DATE_OF_BIRTH_SIZE);
+        String dateStr = this.getFixedString(buffer, DATE_OF_BIRTH_SIZE);
         try {
             this.dateOfBirth = LocalDate.parse(dateStr);
         } catch (DateTimeParseException e) {
@@ -72,14 +86,22 @@ public class Person implements Record<Person> {
             this.dateOfBirth = LocalDate.of(1900, 1, 1);
         }
 
-        this.id = getFixedString(buffer, ID_SIZE);
+        this.id = this.getFixedString(buffer, ID_SIZE);
     }
 
+    /**
+     * Creates a new Person instance
+     */
     @Override
     public Person createClass() {
         return new Person();
     }
 
+    /**
+     * Writes a String to ByteBuffer with fixed length
+     * Pads with space if String is shorter than specified length
+     * Truncates if String is longer than specified length
+     */
     private void putFixedString(ByteBuffer buffer, String value, int length) {
         if (value == null) value = "";
 
@@ -88,24 +110,27 @@ public class Person implements Record<Person> {
 
         buffer.put(bytes, 0, bytesToWrite);
 
+        // space-padding
         for (int i = bytesToWrite; i < length; i++) {
-            buffer.put((byte) 0);
+            buffer.put((byte) ' ');
         }
     }
 
+    /**
+     * Reads a fixed-length String from ByteBuffer
+     * Stops at first space in the data
+     */
     private String getFixedString(ByteBuffer buffer, int length) {
         byte[] bytes = new byte[length];
         buffer.get(bytes);
 
-        int actualLength = 0;
-        for (int i = 0; i < length; i++) {
-            if (bytes[i] == 0) break;
-            actualLength++;
+        // trim trailing spaces
+        int actualLength = length;
+        while (actualLength > 0 && bytes[actualLength - 1] == ' ') {
+            actualLength--;
         }
 
-        if (actualLength == 0) return "";
-
-        return new String(bytes, 0, actualLength, StandardCharsets.UTF_8);
+        return actualLength > 0 ? new String(bytes, 0, actualLength, StandardCharsets.UTF_8) : "";
     }
 
     @Override
@@ -121,5 +146,4 @@ public class Person implements Record<Person> {
     public String getSurname() { return surname; }
     public LocalDate getDateOfBirth() { return dateOfBirth; }
     public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
 }

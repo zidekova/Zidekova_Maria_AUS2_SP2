@@ -1,4 +1,4 @@
-package model;
+package structure;
 
 public interface Record<T> {
     boolean equals(Object other);
