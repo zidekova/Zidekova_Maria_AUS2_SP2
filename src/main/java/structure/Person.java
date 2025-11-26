@@ -44,7 +44,7 @@ public class Person implements Record<Person> {
      */
     @Override
     public int getSize() {
-        return NAME_SIZE + SURNAME_SIZE + DATE_OF_BIRTH_SIZE + ID_SIZE;
+        return (1 + NAME_SIZE) + (1 + SURNAME_SIZE) + (1 + DATE_OF_BIRTH_SIZE) + (1 + ID_SIZE);
     }
 
     /**
@@ -52,7 +52,7 @@ public class Person implements Record<Person> {
      */
     @Override
     public byte[] getBytes() {
-        ByteBuffer buffer = ByteBuffer.allocate(getSize());
+        ByteBuffer buffer = ByteBuffer.allocate(this.getSize());
 
         this.putFixedString(buffer, this.name, NAME_SIZE);
         this.putFixedString(buffer, this.surname, SURNAME_SIZE);
@@ -99,38 +99,34 @@ public class Person implements Record<Person> {
 
     /**
      * Writes a String to ByteBuffer with fixed length
-     * Pads with space if String is shorter than specified length
-     * Truncates if String is longer than specified length
      */
     private void putFixedString(ByteBuffer buffer, String value, int length) {
         if (value == null) value = "";
 
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-        int bytesToWrite = Math.min(bytes.length, length);
+        int validCharsCount = Math.min(bytes.length, length);
 
-        buffer.put(bytes, 0, bytesToWrite);
+        buffer.put((byte) validCharsCount);
+        buffer.put(bytes, 0, validCharsCount);
 
         // space-padding
-        for (int i = bytesToWrite; i < length; i++) {
+        for (int i = validCharsCount; i < length; i++) {
             buffer.put((byte) ' ');
         }
     }
 
     /**
      * Reads a fixed-length String from ByteBuffer
-     * Stops at first space in the data
      */
     private String getFixedString(ByteBuffer buffer, int length) {
+        int validCharsCount = Byte.toUnsignedInt(buffer.get());
+
         byte[] bytes = new byte[length];
         buffer.get(bytes);
 
-        // trim trailing spaces
-        int actualLength = length;
-        while (actualLength > 0 && bytes[actualLength - 1] == ' ') {
-            actualLength--;
-        }
+        if (validCharsCount > length) validCharsCount = length;
 
-        return actualLength > 0 ? new String(bytes, 0, actualLength, StandardCharsets.UTF_8) : "";
+        return new String(bytes, 0, validCharsCount, StandardCharsets.UTF_8);
     }
 
     @Override

@@ -22,6 +22,12 @@ public class Main {
                 JOptionPane.showMessageDialog(null,
                         "Chyba pri inicializácii databázy: " + e.getMessage(),
                         "Chyba", JOptionPane.ERROR_MESSAGE);
+            } catch (IllegalArgumentException e) {
+                JOptionPane.showMessageDialog(null,
+                        "Chyba konfigurácie: " + e.getMessage() +
+                                "\n\nZáznamy nemôžu byť uložené v heap file.\n" +
+                                "Skontrolujte veľkosť clusteru a záznamu.",
+                        "Chyba konfigurácie", JOptionPane.ERROR_MESSAGE);
             }
         });
     }
@@ -30,8 +36,15 @@ public class Main {
      * Initializes heap file and operation generator instances
      */
     private static void initializeApplication() throws IOException {
-        heap = new HeapFile<>("pacienti.dat", 256, new Person());
-        operationGenerator = new OperationGenerator(heap);
+        try {
+            heap = new HeapFile<>("pacienti.dat", 256, new Person());
+            operationGenerator = new OperationGenerator(heap);
+        } catch (IllegalArgumentException e) {
+            if (e.getMessage().contains("Cluster size") && e.getMessage().contains("menší ako veľkosť záznamu")) {
+                throw new IllegalArgumentException(e.getMessage());
+            }
+            throw e;
+        }
     }
 
     /**
@@ -186,7 +199,7 @@ public class Main {
 
             new Thread(() -> {
                 try {
-                    String result = operationGenerator.runRandomOperations(operations);
+                    String result = operationGenerator.runRandomOperations(operations, Main::updateProgress);
                     SwingUtilities.invokeLater(() -> {
                         area.setText(result);
                     });
@@ -306,13 +319,12 @@ public class Main {
                 List<Person> records = block.getRecords();
 
                 sb.append("── BLOK ").append(i).append(" ──────────────────────────────────────────────\n");
-                sb.append(" Adresa na disku: ").append(i * heap.getClusterSize()).append(" bytes\n");
+                sb.append(" Adresa na disku: ").append(block.getAddress()).append(" bytes\n");
                 sb.append(" Stav: ");
                 if (block.isEmpty()) sb.append("PRÁZDNY");
                 else if (!block.hasSpace()) sb.append("PLNÝ");
                 else sb.append("ČIASTOČNE VOĽNÝ");
                 sb.append("  Platné záznamy: ").append(block.getValidCount()).append("/").append(block.getRecordsPerBlock()).append("\n");
-                sb.append(" Bitmapa: ").append(block.getBitmapVisualization()).append("\n");
 
                 if (records.isEmpty()) {
                     sb.append(" Žiadne platné záznamy\n");

@@ -11,6 +11,14 @@ public class HeapFile<T extends Record<T>> {
     private final String metadataFile; // to track block occupancy
 
     public HeapFile(String filename, int clusterSize, T recordTemplate) throws IOException {
+        if (clusterSize < recordTemplate.getSize()) {
+            throw new IllegalArgumentException(
+                    "Cluster size (" + clusterSize + " bytes) je menší ako veľkosť záznamu (" +
+                            recordTemplate.getSize() + " bytes). Cluster musí byť aspoň " +
+                            recordTemplate.getSize() + " bytes."
+            );
+        }
+
         this.templateBlock = new Block<>(0, clusterSize, recordTemplate);
         this.file = new RandomAccessFile(filename, "rw");
         this.metadataFile = filename + ".meta";
@@ -30,6 +38,10 @@ public class HeapFile<T extends Record<T>> {
      * Saves current block occupancy lists to metadata file
      */
     private void saveBlockLists() throws IOException {
+        int blockCount = this.getBlockCount();
+        this.partiallyFreeBlocks.removeIf(idx -> idx < 0 || idx >= blockCount);
+        this.emptyBlocks.removeIf(idx -> idx < 0 || idx >= blockCount);
+
         try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(this.metadataFile))) {
             dos.writeInt(this.getClusterSize());
             dos.writeInt(this.getRecordsPerBlock());
@@ -53,7 +65,6 @@ public class HeapFile<T extends Record<T>> {
             int savedCluster = dis.readInt();
             int savedRecordsPerBlock = dis.readInt();
 
-            // validate that saved configuration matches current parameters
             if (savedCluster != this.getClusterSize() || savedRecordsPerBlock != this.getRecordsPerBlock()) {
                 this.partiallyFreeBlocks.clear();
                 this.emptyBlocks.clear();
@@ -71,6 +82,13 @@ public class HeapFile<T extends Record<T>> {
             for (int i = 0; i < eSize; i++) {
                 this.emptyBlocks.add(dis.readInt());
             }
+
+            int blockCount = this.getBlockCount();
+            this.partiallyFreeBlocks.removeIf(idx -> idx < 0 || idx >= blockCount);
+            this.emptyBlocks.removeIf(idx -> idx < 0 || idx >= blockCount);
+
+            Collections.sort(this.partiallyFreeBlocks);
+            Collections.sort(this.emptyBlocks);
 
         } catch (EOFException e) {
             this.partiallyFreeBlocks.clear();
@@ -100,15 +118,19 @@ public class HeapFile<T extends Record<T>> {
      * Updates block occupancy lists based on a blocks current state
      */
     private void updateBlockLists(int blockIndex, Block<T> block) {
-        this.partiallyFreeBlocks.remove(Integer.valueOf(blockIndex));
-        this.emptyBlocks.remove(Integer.valueOf(blockIndex));
-        if (block.isEmpty()) {
-            this.emptyBlocks.add(blockIndex);
-        } else if (block.hasSpace()) {
-            this.partiallyFreeBlocks.add(blockIndex);
+        boolean isEmpty = block.isEmpty();
+        boolean hasSpace = block.hasSpace() && !isEmpty;
+
+        this.emptyBlocks.remove((Integer) blockIndex);
+        this.partiallyFreeBlocks.remove((Integer) blockIndex);
+
+        if (isEmpty) {
+            if (!this.emptyBlocks.contains(blockIndex)) this.emptyBlocks.add(blockIndex);
+        } else if (hasSpace) {
+            if (!this.partiallyFreeBlocks.contains(blockIndex)) this.partiallyFreeBlocks.add(blockIndex);
         }
-        Collections.sort(this.partiallyFreeBlocks);
         Collections.sort(this.emptyBlocks);
+        Collections.sort(this.partiallyFreeBlocks);
     }
 
     /**
@@ -148,7 +170,6 @@ public class HeapFile<T extends Record<T>> {
     public boolean delete(int blockIndex, T pattern) throws IOException {
         this.checkBlockIndex(blockIndex);
         Block<T> block = this.readBlock(blockIndex);
-        block.getValidCount();
         boolean removed = block.deleteRecord(pattern);
 
         if (removed) {
@@ -194,13 +215,14 @@ public class HeapFile<T extends Record<T>> {
             long newLength = (long) newBlockCount * this.getClusterSize();
             this.file.setLength(newLength);
 
-            this.emptyBlocks.clear();
+            this.emptyBlocks.removeIf(index -> index >= newBlockCount);
             this.partiallyFreeBlocks.removeIf(index -> index >= newBlockCount);
 
             // remove metadata file if entire file is empty
             if (newBlockCount == 0) {
                 new File(this.metadataFile).delete();
             }
+            this.saveBlockLists();
         }
     }
 
@@ -264,13 +286,39 @@ public class HeapFile<T extends Record<T>> {
      * 3. New block at end of file
      */
     private int findBestBlockForInsert() throws IOException {
-        if (!this.partiallyFreeBlocks.isEmpty()) {
-            return this.partiallyFreeBlocks.getFirst();
+        int blockCount = this.getBlockCount();
+
+        Iterator<Integer> itPart = this.partiallyFreeBlocks.iterator();
+        while (itPart.hasNext()) {
+            int idx = itPart.next();
+            if (idx < 0 || idx >= blockCount) {
+                itPart.remove();
+                continue;
+            }
+            Block<T> block = this.readBlock(idx);
+            if (block.hasSpace() && !block.isEmpty()) {
+                return idx;
+            } else {
+                itPart.remove();
+            }
         }
-        if (!this.emptyBlocks.isEmpty()) {
-            return this.emptyBlocks.removeFirst();
+
+        Iterator<Integer> itEmpty = this.emptyBlocks.iterator();
+        while (itEmpty.hasNext()) {
+            int idx = itEmpty.next();
+            if (idx < 0 || idx >= blockCount) {
+                itEmpty.remove();
+                continue;
+            }
+            Block<T> block = this.readBlock(idx);
+            if (block.isEmpty()) {
+                return idx;
+            } else {
+                itEmpty.remove();
+            }
         }
-        return this.getBlockCount();
+
+        return blockCount;
     }
 
     /**
