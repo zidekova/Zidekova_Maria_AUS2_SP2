@@ -1,17 +1,15 @@
-package main;
+package testers;
 
-import structure.*;
-import generator.OperationGenerator;
+import data.Person;
+import hash.LinearHashing;
 import javax.swing.*;
 import java.awt.*;
 import java.io.IOException;
-import java.time.LocalDate;
-import java.util.List;
 
-public class Main {
-    private static HeapFile<Person> heap;
+public class GUIHashFileTester {
+    private static LinearHashing<Person> hashFile;
     private static JTextArea area;
-    private static OperationGenerator operationGenerator;
+    private static HashFileTester hashFileTester;
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
@@ -20,38 +18,26 @@ public class Main {
                 createAndShowGUI();
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(null,
-                        "Chyba pri inicializácii databázy: " + e.getMessage(),
+                        "Chyba pri inicializácii hash databázy: " + e.getMessage(),
                         "Chyba", JOptionPane.ERROR_MESSAGE);
-            } catch (IllegalArgumentException e) {
-                JOptionPane.showMessageDialog(null,
-                        "Chyba konfigurácie: " + e.getMessage() +
-                                "\n\nZáznamy nemôžu byť uložené v heap file.\n" +
-                                "Skontrolujte veľkosť clusteru a záznamu.",
-                        "Chyba konfigurácie", JOptionPane.ERROR_MESSAGE);
             }
         });
     }
 
     /**
-     * Initializes heap file and operation generator instances
+     * Initializes hash file and operation generator instances
      */
     private static void initializeApplication() throws IOException {
-        try {
-            heap = new HeapFile<>("pacienti.dat", 256, new Person());
-            operationGenerator = new OperationGenerator(heap);
-        } catch (IllegalArgumentException e) {
-            if (e.getMessage().contains("Cluster size") && e.getMessage().contains("menší ako veľkosť záznamu")) {
-                throw new IllegalArgumentException(e.getMessage());
-            }
-            throw e;
-        }
+        // M = 2 (základný počet skupín), primary block size = 256, overflow block size = 128
+        hashFile = new LinearHashing<>("pacienti_hash.dat", 256, 128, new Person(), 2);
+        hashFileTester = new HashFileTester(hashFile);
     }
 
     /**
      * Creates and displays the main application GUI
      */
     private static void createAndShowGUI() {
-        JFrame frame = new JFrame("Databáza pacientov - Heap File");
+        JFrame frame = new JFrame("Databáza pacientov - Lineárne Hešovanie");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setSize(1000, 700);
 
@@ -105,7 +91,7 @@ public class Main {
         headerPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         headerPanel.setBackground(new Color(240, 240, 240));
 
-        JLabel titleLabel = new JLabel("DATABÁZA PACIENTOV");
+        JLabel titleLabel = new JLabel("DATABÁZA PACIENTOV - LINEÁRNE HEŠOVANIE");
         titleLabel.setFont(new Font("Arial", Font.BOLD, 16));
         titleLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 
@@ -123,14 +109,18 @@ public class Main {
         panel.setBorder(BorderFactory.createTitledBorder("Operácie so súborom"));
         panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
 
-        JButton showBlocksBtn = new JButton("Zobraziť databázu");
-        showBlocksBtn.addActionListener(e -> displayBlockDetails());
+        JButton showStatsBtn = new JButton("Zobraziť štatistiky");
+        showStatsBtn.addActionListener(e -> displayStatistics());
 
         JButton showStructureBtn = new JButton("Zobraziť detaily o databáze");
         showStructureBtn.addActionListener(e -> displayFileStructure());
 
+        JButton showAllBlocksBtn = new JButton("Zobraziť celý hash súbor");
+        showAllBlocksBtn.addActionListener(e -> displayAllBlocks());
+
         panel.add(showStructureBtn);
-        panel.add(showBlocksBtn);
+        panel.add(showStatsBtn);
+        panel.add(showAllBlocksBtn);
 
         return panel;
     }
@@ -199,7 +189,7 @@ public class Main {
 
             new Thread(() -> {
                 try {
-                    String result = operationGenerator.runRandomOperations(operations, Main::updateProgress);
+                    String result = hashFileTester.runRandomOperations(operations, GUIHashFileTester::updateProgress);
                     SwingUtilities.invokeLater(() -> {
                         area.setText(result);
                     });
@@ -230,7 +220,7 @@ public class Main {
 
             new Thread(() -> {
                 try {
-                    String result = operationGenerator.runInsertOnly(records, Main::updateProgress);
+                    String result = hashFileTester.runInsertOnly(records, GUIHashFileTester::updateProgress);
                     SwingUtilities.invokeLater(() -> {
                         area.setText(result);
                     });
@@ -259,12 +249,12 @@ public class Main {
      */
     private static void clearDatabase() {
         int confirm = JOptionPane.showConfirmDialog(null,
-                "Naozaj chcete vyčistiť celú databázu?",
+                "Naozaj chcete vyčistiť celú hash databázu?",
                 "Potvrdenie vymazania", JOptionPane.YES_NO_OPTION);
 
         if (confirm == JOptionPane.YES_OPTION) {
             try {
-                String result = operationGenerator.clearDatabase();
+                String result = hashFileTester.clearDatabase();
                 initializeApplication();
                 area.setText(result);
 
@@ -280,70 +270,61 @@ public class Main {
     private static void displayFileStructure() {
         try {
             StringBuilder sb = new StringBuilder();
-            sb.append("DETAILY O DATABÁZE\n\n");
+            sb.append("DETAILY O HASH DATABÁZE\n\n");
 
-            java.io.File dataFile = new java.io.File("pacienti.dat");
-            Person person =  new Person();
+            java.io.File dataFile = new java.io.File("pacienti_hash.dat");
+            java.io.File overflowFile = new java.io.File("pacienti_hash.dat.overflow");
+            java.io.File metaFile = new java.io.File("pacienti_hash.dat.meta");
+
+            Person person = new Person();
 
             sb.append("• HLAVNÝ SÚBOR DÁT:\n");
-            sb.append("\t- pacienti.dat (Heap File)\n");
-            sb.append("\t- Veľkosť: ").append(dataFile.exists() ? dataFile.length() : 0).append(" bytes\n");
-            sb.append("\t- Blokov: ").append(heap.getBlockCount()).append("\n");
-            sb.append("\t- Cluster size: ").append(heap.getClusterSize()).append(" bytes\n\n");
+            sb.append("\t- pacienti_hash.dat (Linear Hashing)\n");
+            sb.append("\t- Veľkosť: ").append(dataFile.exists() ? dataFile.length() : 0).append(" bytes\n\n");
+
+            sb.append("• OVERFLOW SÚBOR:\n");
+            sb.append("\t- pacienti_hash.dat.overflow\n");
+            sb.append("\t- Veľkosť: ").append(overflowFile.exists() ? overflowFile.length() : 0).append(" bytes\n\n");
+
+            sb.append("• METADÁTA:\n");
+            sb.append("\t- pacienti_hash.dat.meta\n");
+            sb.append("\t- Veľkosť: ").append(metaFile.exists() ? metaFile.length() : 0).append(" bytes\n\n");
 
             sb.append("• ŠTRUKTÚRA BLOKOV:\n");
-            sb.append("\t- Každý blok: ").append(heap.getClusterSize()).append(" bytes\n");
-            sb.append("\t- Záznamy: ").append(heap.getRecordsPerBlock()).append(" × ").append(person.getSize()).append(" bytes\n");
-            sb.append("\t- Padding: ").append(heap.getClusterSize() - (heap.getRecordsPerBlock() * person.getSize())).append(" bytes\n\n");
+            sb.append("\t- Primárny blok: ").append(256).append(" bytes\n");
+            sb.append("\t- Overflow blok: ").append(128).append(" bytes\n");
+            sb.append("\t- Veľkosť záznamu: ").append(person.getSize()).append(" bytes\n");
+            sb.append("\t- Záznamov v primárnom bloku: ").append(256 / person.getSize()).append("\n");
+            sb.append("\t- Záznamov v overflow bloku: ").append(128 / person.getSize()).append("\n");
 
             area.setText(sb.toString());
 
-        } catch (IOException ex) {
+        } catch (Exception ex) {
             showError("Chyba pri čítaní štruktúry: " + ex.getMessage());
         }
     }
 
     /**
-     * Displays information of all blocks and their contents
+     * Displays hash file statistics
      */
-    private static void displayBlockDetails() {
+    private static void displayStatistics() {
         try {
-            StringBuilder sb = new StringBuilder();
-            sb.append("DATABÁZA PACIENTOV\n\n");
+            String stats = hashFileTester.getStatistics();
+            area.setText(stats);
+        } catch (Exception ex) {
+            showError("Chyba pri získavaní štatistík: " + ex.getMessage());
+        }
+    }
 
-            int blockCount = heap.getBlockCount();
-            int totalRecords = 0;
-
-            for (int i = 0; i < blockCount; i++) {
-                Block<Person> block = heap.readBlock(i);
-                List<Person> records = block.getRecords();
-
-                sb.append("── BLOK ").append(i).append(" ──────────────────────────────────────────────\n");
-                sb.append(" Adresa na disku: ").append(block.getAddress()).append(" bytes\n");
-                sb.append(" Stav: ");
-                if (block.isEmpty()) sb.append("PRÁZDNY");
-                else if (!block.hasSpace()) sb.append("PLNÝ");
-                else sb.append("ČIASTOČNE VOĽNÝ");
-                sb.append("  Platné záznamy: ").append(block.getValidCount()).append("/").append(block.getRecordsPerBlock()).append("\n");
-
-                if (records.isEmpty()) {
-                    sb.append(" Žiadne platné záznamy\n");
-                } else {
-                    for (int j = 0; j < records.size(); j++) {
-                        sb.append(" ").append(j + 1).append(". ").append(records.get(j)).append("\n");
-                    }
-                }
-
-                sb.append("──────────────────────────────────────────────────────────\n\n");
-                totalRecords += block.getValidCount();
-            }
-
-            sb.append("CELKOVO: ").append(totalRecords).append(" záznamov v ").append(blockCount).append(" blokoch");
-
-            area.setText(sb.toString());
-
-        } catch (IOException ex) {
-            showError("Chyba pri čítaní blokov: " + ex.getMessage());
+    /**
+     * Displays all blocks (primary and overflow) of the hash file
+     */
+    private static void displayAllBlocks() {
+        try {
+            String allBlocks = hashFileTester.displayAllBlocks();
+            area.setText(allBlocks);
+        } catch (Exception ex) {
+            showError("Chyba pri zobrazovaní hash súboru: " + ex.getMessage());
         }
     }
 
@@ -352,52 +333,39 @@ public class Main {
      */
     private static void insertTestRecord() {
         try {
-            Person newPerson = operationGenerator.generateRandomPatient();
-            int blockIndex = heap.insert(newPerson);
+            Person newPerson = hashFileTester.generateRandomPatient();
+            hashFile.insert(newPerson, newPerson.getKey());
 
             area.setText("PRIDANÝ NOVÝ ZÁZNAM:\n\n" +
                     "Meno: " + newPerson.getName() + " " + newPerson.getSurname() + "\n" +
                     "Dátum narodenia: " + newPerson.getDateOfBirth() + "\n" +
-                    "ID: " + newPerson.getId() + "\n" +
-                    "Uloženie do bloku: " + blockIndex + "\n\n" +
-                    "Záznam bol úspešne pridaný do databázy.");
+                    "ID: " + newPerson.getId() + "\n\n" +
+                    "Záznam bol úspešne pridaný do hash databázy.");
 
-
-        } catch (IOException ex) {
+        } catch (Exception ex) {
             showError("Chyba pri vkladaní záznamu: " + ex.getMessage());
         }
     }
 
     /**
-     * Searches for a record by ID across all blocks
+     * Searches for a record by ID
      */
     private static void searchRecord() {
         String id = JOptionPane.showInputDialog("Zadajte ID pacienta pre vyhľadanie:");
         if (id != null && !id.trim().isEmpty()) {
             try {
-                Person pattern = new Person("", "", LocalDate.now(), id.trim());
-                boolean found = false;
-                int blockCount = heap.getBlockCount();
-
-                for (int block = 0; block < blockCount; block++) {
-                    Person result = heap.get(block, pattern);
-                    if (result != null) {
-                        area.setText("ZÁZNAM NAJDENÝ:\n\n" +
-                                "Meno: " + result.getName() + " " + result.getSurname() + "\n" +
-                                "Dátum narodenia: " + result.getDateOfBirth() + "\n" +
-                                "ID: " + result.getId() + "\n" +
-                                "Nájdený v bloku: " + block + "\n\n" +
-                                "Vyhľadávanie prebehlo úspešne.");
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
+                Person found = hashFile.get(id.trim());
+                if (found != null) {
+                    area.setText("ZÁZNAM NAJDENÝ:\n\n" +
+                            "Meno: " + found.getName() + " " + found.getSurname() + "\n" +
+                            "Dátum narodenia: " + found.getDateOfBirth() + "\n" +
+                            "ID: " + found.getId() + "\n\n" +
+                            "Vyhľadávanie prebehlo úspešne.");
+                } else {
                     area.setText("ZÁZNAM S ID '" + id + "' NEBOL NAJDENÝ\n");
                 }
 
-            } catch (IOException ex) {
+            } catch (Exception ex) {
                 showError("Chyba pri vyhľadávaní: " + ex.getMessage());
             }
         }
@@ -410,25 +378,16 @@ public class Main {
         String id = JOptionPane.showInputDialog("Zadajte ID pacienta pre zmazanie:");
         if (id != null && !id.trim().isEmpty()) {
             try {
-                Person pattern = new Person("", "", LocalDate.now(), id.trim());
-                boolean deleted = false;
-                int blockCount = heap.getBlockCount();
-
-                for (int block = 0; block < blockCount; block++) {
-                    if (heap.delete(block, pattern)) {
-                        area.setText("ZÁZNAM S ID '" + id + "' BOL ÚSPEŠNE ZMAZANÝ\n\n" +
-                                "Záznam bol odstránený z bloku " + block + ".\n");
-                        deleted = true;
-                        break;
-                    }
-                }
-
-                if (!deleted) {
+                boolean deleted = hashFile.delete(id.trim());
+                if (deleted) {
+                    area.setText("ZÁZNAM S ID '" + id + "' BOL ÚSPEŠNE ZMAZANÝ\n\n" +
+                            "Záznam bol odstránený z hash databázy.\n");
+                } else {
                     area.setText("ZÁZNAM S ID '" + id + "' NEBOL NAJDENÝ\n\n" +
                             "Zmazanie nebolo vykonané.");
                 }
 
-            } catch (IOException ex) {
+            } catch (Exception ex) {
                 showError("Chyba pri mazaní: " + ex.getMessage());
             }
         }

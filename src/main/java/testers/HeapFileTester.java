@@ -1,12 +1,13 @@
-package generator;
+package testers;
 
-import structure.*;
+import data.Person;
+import heap.*;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.function.Consumer;
 
-public class OperationGenerator {
+public class HeapFileTester {
     private static final String[] NAMES = {"Anna","Peter","Maria","Jozef","Eva","Michal","Katarina"};
     private static final String[] SURNAMES = {"Novak","Horak","Kral","Bielik","Farkas","Kovac","Urban"};
     private static final Random random = new Random();
@@ -14,7 +15,7 @@ public class OperationGenerator {
     private HeapFile<Person> heap;
     private final List<Person> insertedPersons;
 
-    public OperationGenerator(HeapFile<Person> heap) {
+    public HeapFileTester(HeapFile<Person> heap) {
         this.heap = heap;
         this.insertedPersons = new ArrayList<>();
     }

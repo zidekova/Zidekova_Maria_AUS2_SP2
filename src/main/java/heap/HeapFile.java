@@ -1,4 +1,6 @@
-package structure;
+package heap;
+
+import data.Record;
 
 import java.io.*;
 import java.util.*;
@@ -260,7 +262,7 @@ public class HeapFile<T extends Record<T>> {
     /**
      * Writes a block to disk at specified index
      */
-    private void writeBlock(int blockIndex, Block<T> block) throws IOException {
+    public void writeBlock(int blockIndex, Block<T> block) throws IOException {
         long pos = (long) blockIndex * this.getClusterSize();
 
         if (pos + this.getClusterSize() > this.file.length()) {
@@ -275,7 +277,7 @@ public class HeapFile<T extends Record<T>> {
     /**
      * Creates new blocks
      */
-    private Block<T> createBlock(int blockIndex) {
+    protected Block<T> createBlock(int blockIndex) {
         return new Block<>(blockIndex, this.getClusterSize(), this.getRecordTemplate());
     }
 
@@ -356,5 +358,9 @@ public class HeapFile<T extends Record<T>> {
 
     public T getRecordTemplate() {
         return this.templateBlock.getRecordTemplate();
+    }
+
+    public RandomAccessFile getFile() {
+        return file;
     }
 }

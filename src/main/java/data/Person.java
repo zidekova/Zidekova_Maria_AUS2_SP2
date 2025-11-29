@@ -1,4 +1,4 @@
-package structure;
+package data;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -39,6 +39,11 @@ public class Person implements Record<Person> {
         return this.id.equals(person.id);
     }
 
+    @Override
+    public int hashCode() {
+        return id != null ? id.hashCode() : 0;
+    }
+
     /**
      * Returns the size of this record in bytes
      */
@@ -68,8 +73,7 @@ public class Person implements Record<Person> {
     @Override
     public void fromBytes(byte[] data) {
         if (data == null || data.length != getSize()) {
-            System.err.println("Error: Invalid data size for deserialization");
-            return;
+            throw new IllegalArgumentException("Invalid data size for Person");
         }
 
         // wrap data in buffer for reading
@@ -82,7 +86,6 @@ public class Person implements Record<Person> {
         try {
             this.dateOfBirth = LocalDate.parse(dateStr);
         } catch (DateTimeParseException e) {
-            System.err.println("Error with parsing date: '" + dateStr + "'");
             this.dateOfBirth = LocalDate.of(1900, 1, 1);
         }
 
@@ -95,6 +98,16 @@ public class Person implements Record<Person> {
     @Override
     public Person createClass() {
         return new Person();
+    }
+
+    @Override
+    public String getKey() {
+        return this.id;
+    }
+
+    // Pridaná metóda pre nastavenie kľúča
+    public void setKey(String key) {
+        this.id = key;
     }
 
     /**
@@ -138,8 +151,16 @@ public class Person implements Record<Person> {
                 id != null ? id : "NULL");
     }
 
+    // Getters and Setters
     public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+
     public String getSurname() { return surname; }
+    public void setSurname(String surname) { this.surname = surname; }
+
     public LocalDate getDateOfBirth() { return dateOfBirth; }
+    public void setDateOfBirth(LocalDate dateOfBirth) { this.dateOfBirth = dateOfBirth; }
+
     public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
 }

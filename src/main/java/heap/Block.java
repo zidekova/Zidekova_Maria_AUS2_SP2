@@ -1,21 +1,24 @@
-package structure;
+package heap;
+
+import data.Record;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
-public class Block<T extends Record<T>> {
+public class Block<T extends data.Record<T>> {
     private final int address;
     private final int blockSize;
     private final T recordTemplate;
     private final int recordsPerBlock; // maximum number of records that fit in the block
-    private final T[] records;
-    private int validCount;
+    protected T[] records;
+    protected int validCount;
 
     @SuppressWarnings("unchecked")
     public Block(int index, int blockSize, T recordTemplate) {
-        this.address = index * blockSize;
+        this.address = index;
         this.blockSize = blockSize;
         this.recordTemplate = recordTemplate;
         this.recordsPerBlock = blockSize / recordTemplate.getSize();
@@ -29,11 +32,19 @@ public class Block<T extends Record<T>> {
         return this.recordsPerBlock;
     }
 
+    public long getByteOffset() {
+        return (long) this.address * (long) this.blockSize;
+    }
+
     /**
      * Returns the number of currently valid records in the block
      */
     public int getValidCount() {
         return this.validCount;
+    }
+
+    protected void setValidCount(int count) {
+        this.validCount = count;
     }
 
     public int getBlockSize() { return blockSize; }
@@ -59,14 +70,19 @@ public class Block<T extends Record<T>> {
      * @return index where record was added, or -1 if no space is available
      */
     public int addRecord(T record) {
-        if (!this.hasSpace()) return -1;
+        if (!this.hasSpace()) {
+            return -1;
+        }
+
         for (int i = 0; i < this.recordsPerBlock; i++) {
-            if (this.records[i] == null) {
+            // Kontrola či je slot skutočne voľný
+            if (this.records[i] == null || isEmptyRecord(this.records[i])) {
                 this.records[i] = record;
                 this.validCount++;
                 return i;
             }
         }
+
         return -1;
     }
 
@@ -76,12 +92,15 @@ public class Block<T extends Record<T>> {
      */
     public boolean deleteRecord(T record) {
         for (int i = 0; i < this.recordsPerBlock; i++) {
-            if (this.records[i] != null && this.records[i].equals(record)) {
+            if (records[i] != null && records[i].getKey() != null &&
+                    records[i].getKey().equals(record.getKey())) {
+
                 this.records[i] = null;
                 this.validCount--;
                 return true;
             }
         }
+
         return false;
     }
 
@@ -91,10 +110,12 @@ public class Block<T extends Record<T>> {
      */
     public T findRecord(T record) {
         for (int i = 0; i < this.recordsPerBlock; i++) {
-            if (this.records[i] != null && this.records[i].equals(record)) {
+            if (this.records[i] != null && this.records[i].getKey() != null &&
+                    this.records[i].getKey().equals(record.getKey())) {
                 return this.records[i];
             }
         }
+
         return null;
     }
 
@@ -102,11 +123,22 @@ public class Block<T extends Record<T>> {
      * Returns a list of all valid records in the block
      */
     public List<T> getRecords() {
-        List<T> list = new ArrayList<>();
-        for (int i = 0; i < this.recordsPerBlock; i++) {
-            if (this.records[i] != null) list.add(this.records[i]);
+        List<T> result = new ArrayList<>();
+        if (records != null) {
+            for (T record : records) {
+                if (record != null && !isEmptyRecord(record)) {
+                    result.add(record);
+                }
+            }
         }
-        return list;
+        return result;
+    }
+
+    public void clearRecords() {
+        if (records != null) {
+            Arrays.fill(records, null);
+        }
+        validCount = 0;
     }
 
     /**
@@ -178,9 +210,21 @@ public class Block<T extends Record<T>> {
         }
     }
 
-    private boolean isEmptySlot(byte[] data) {
+    private boolean isEmptyRecord(T record) {
+        if (record == null) return true;
+        try {
+            byte[] recordBytes = record.getBytes();
+            return isEmptySlot(recordBytes);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    protected boolean isEmptySlot(byte[] data) {
         for (byte b : data) {
-            if (b != ' ') return false;
+            if (b != 0 && b != ' ') {
+                return false;
+            }
         }
         return true;
     }

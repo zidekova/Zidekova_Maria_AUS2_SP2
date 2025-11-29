@@ -1,4 +1,4 @@
-package structure;
+package data;
 
 public interface Record<T> {
     boolean equals(Object other);
@@ -6,4 +6,6 @@ public interface Record<T> {
     byte[] getBytes();
     void fromBytes(byte[] data);
     T createClass();
+    String getKey();
+    void setKey(String key);
 }
