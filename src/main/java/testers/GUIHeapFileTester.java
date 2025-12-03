@@ -53,7 +53,26 @@ public class GUIHeapFileTester {
      */
     private static void createAndShowGUI() {
         JFrame frame = new JFrame("Databáza pacientov - Heap File");
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+        frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+
+        frame.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent windowEvent) {
+                try {
+                    if (heap != null) {
+                        heap.close();
+                    }
+                    frame.dispose();
+                    System.exit(0);
+                } catch (IOException ex) {
+                    JOptionPane.showMessageDialog(frame,
+                            "Chyba pri ukladaní dát: " + ex.getMessage(),
+                            "Chyba", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        });
+
         frame.setSize(1000, 700);
 
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));

@@ -105,7 +105,7 @@ public class Person implements Record<Person> {
         return this.id;
     }
 
-    // Pridaná metóda pre nastavenie kľúča
+    @Override
     public void setKey(String key) {
         this.id = key;
     }
@@ -151,16 +151,11 @@ public class Person implements Record<Person> {
                 id != null ? id : "NULL");
     }
 
-    // Getters and Setters
     public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
 
     public String getSurname() { return surname; }
-    public void setSurname(String surname) { this.surname = surname; }
 
     public LocalDate getDateOfBirth() { return dateOfBirth; }
-    public void setDateOfBirth(LocalDate dateOfBirth) { this.dateOfBirth = dateOfBirth; }
 
     public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
 }

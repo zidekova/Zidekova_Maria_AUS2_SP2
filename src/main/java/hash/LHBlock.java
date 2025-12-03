@@ -52,6 +52,13 @@ public class LHBlock<T extends Record<T>> extends Block<T> {
     }
 
     /**
+     * Sets the length of the overflow chain.
+     */
+    public void setChainLength(int length) {
+        this.chainLength = length;
+    }
+
+    /**
      * Checks if the block is empty.
      */
     @Override

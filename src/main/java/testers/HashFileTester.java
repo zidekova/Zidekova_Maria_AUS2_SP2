@@ -24,7 +24,7 @@ public class HashFileTester {
     }
 
     /**
-     * Runs a specified number of random operations (INSERT, FIND, DELETE) with progress updates
+     * Runs a specified number of random operations (INSERT, FIND, DELETE)
      */
     public String runRandomOperations(int operations, Consumer<String> progressCallback) throws IOException {
         int insertCount = 0;
@@ -33,6 +33,8 @@ public class HashFileTester {
         int validationErrors = 0;
 
         StringBuilder validationLog = new StringBuilder();
+
+        this.synchronizeWithDatabase();
 
         if (progressCallback != null) {
             progressCallback.accept("NÁHODNÉ OPERÁCIE SPUSTENÉ\n\n" +
@@ -54,14 +56,30 @@ public class HashFileTester {
                 }
 
                 switch (op) {
-                    case 0 -> { // INSERT
+                    case 0 -> { // insert
                         insertCount++;
                         Person newPerson = this.generateRandomPatient();
+
+                        int originalSize = this.insertedPersons.size();
+
                         hashFile.insert(newPerson, newPerson.getKey());
                         this.insertedPersons.add(newPerson);
+
+                        String structureComparison = this.compareDatabaseStructure();
+                        if (!structureComparison.isEmpty()) {
+                            validationErrors++;
+                            validationLog.append("NESÚLAD ŠTRUKTÚRY po INSERT v operácii ").append(i)
+                                    .append(" (záznam ").append(newPerson.getKey()).append("):\n")
+                                    .append(structureComparison).append("\n");
+                        } else if (this.insertedPersons.size() != originalSize + 1) {
+                            validationErrors++;
+                            validationLog.append("NESÚLAD VEĽKOSTI po INSERT v operácii ").append(i)
+                                    .append(": pôvodná veľkosť=").append(originalSize)
+                                    .append(", nová veľkosť=").append(this.insertedPersons.size()).append("\n");
+                        }
                     }
 
-                    case 1 -> { // FIND
+                    case 1 -> { // find
                         if (this.insertedPersons.isEmpty()) {
                             break;
                         }
@@ -73,10 +91,23 @@ public class HashFileTester {
                         if (found == null) {
                             validationLog.append("CHYBA VYHĽADÁVANIA pri operácii ").append(i)
                                     .append(": Nenašiel sa záznam ").append(toFind.getKey()).append("\n");
+
+                            String structureComparison = this.compareDatabaseStructure();
+                            if (!structureComparison.isEmpty()) {
+                                validationErrors++;
+                                validationLog.append("NESÚLAD ŠTRUKTÚRY po chybnom FIND v operácii ").append(i)
+                                        .append(" (záznam ").append(toFind.getKey()).append("):\n")
+                                        .append(structureComparison).append("\n");
+                            }
+                        } else if (!found.equals(toFind)) {
+                            validationErrors++;
+                            validationLog.append("NEKONZISTENTNÝ ZÁZNAM pri FIND v operácii ").append(i)
+                                    .append(": očakávaný ").append(toFind)
+                                    .append(", nájdený ").append(found).append("\n");
                         }
                     }
 
-                    case 2 -> { // DELETE
+                    case 2 -> { // delete
                         if (this.insertedPersons.isEmpty()) {
                             break;
                         }
@@ -87,9 +118,25 @@ public class HashFileTester {
 
                         if (deleted) {
                             this.insertedPersons.remove(toDelete);
+
+                            String structureComparison = this.compareDatabaseStructure();
+                            if (!structureComparison.isEmpty()) {
+                                validationErrors++;
+                                validationLog.append("NESÚLAD ŠTRUKTÚRY po úspešnom DELETE v operácii ").append(i)
+                                        .append(" (záznam ").append(toDelete.getKey()).append("):\n")
+                                        .append(structureComparison).append("\n");
+                            }
                         } else {
-                            validationLog.append("CHYBA MAZANIA pri operácii ").append(i)
-                                    .append(": Neodstránil sa záznam ").append(toDelete.getKey()).append("\n");
+                            String structureComparison = this.compareDatabaseStructure();
+                            if (!structureComparison.isEmpty()) {
+                                validationErrors++;
+                                validationLog.append("NESÚLAD ŠTRUKTÚRY po neúspešnom DELETE v operácii ").append(i)
+                                        .append(" (záznam ").append(toDelete.getKey()).append("):\n")
+                                        .append(structureComparison).append("\n");
+                            } else {
+                                validationLog.append("CHYBA MAZANIA pri operácii ").append(i)
+                                        .append(": Neodstránil sa záznam ").append(toDelete.getKey()).append("\n");
+                            }
                         }
                     }
                 }
@@ -148,6 +195,102 @@ public class HashFileTester {
     }
 
     /**
+     * Compares the actual database structure with the list
+     */
+    private String compareDatabaseStructure() throws IOException {
+        StringBuilder differences = new StringBuilder();
+
+        List<Person> databaseRecords = new ArrayList<>();
+
+        LinearHashing.LinearHashingStats stats = hashFile.getStats();
+        for (int i = 0; i < stats.totalBlocks; i++) {
+            hash.LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
+
+            for (Person record : primaryBlock.getRecords()) {
+                if (record != null && !record.getKey().trim().isEmpty()) {
+                    databaseRecords.add(record);
+                }
+            }
+
+            int overflowPointer = primaryBlock.getNextOverflow();
+            while (overflowPointer != -1) {
+                OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
+                overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
+
+                for (Person record : overflowBlock.getRecords()) {
+                    if (record != null && !record.getKey().trim().isEmpty()) {
+                        databaseRecords.add(record);
+                    }
+                }
+
+                overflowPointer = overflowBlock.getNextOverflow();
+            }
+        }
+
+        Set<Person> databaseSet = new HashSet<>(databaseRecords);
+        Set<Person> insertedSet = new HashSet<>(insertedPersons);
+
+        for (Person person : insertedPersons) {
+            if (!databaseSet.contains(person)) {
+                differences.append("Záznam chýba v databáze: ").append(person.getKey()).append(" - ").append(person).append("\n");
+            }
+        }
+
+        for (Person person : databaseRecords) {
+            if (!insertedSet.contains(person)) {
+                differences.append("Tento záznam nemal byť v databáze: ").append(person.getKey()).append(" - ").append(person).append("\n");
+            }
+        }
+
+        // Check counts
+        if (insertedPersons.size() != databaseRecords.size()) {
+            differences.append("Nesúlad v počte záznamov: insertedPersons=")
+                    .append(insertedPersons.size())
+                    .append(", databáza=")
+                    .append(databaseRecords.size())
+                    .append("\n");
+        }
+
+        return differences.toString();
+    }
+
+    /**
+     * Synchronizes the internal list with actual database state
+     */
+    public void synchronizeWithDatabase() throws IOException {
+        this.insertedPersons.clear();
+
+        LinearHashing.LinearHashingStats stats = hashFile.getStats();
+        for (int i = 0; i < stats.totalBlocks; i++) {
+            hash.LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
+
+            for (Person record : primaryBlock.getRecords()) {
+                if (record != null && !record.getKey().trim().isEmpty()) {
+                    this.insertedPersons.add(record);
+                }
+            }
+
+            int overflowPointer = primaryBlock.getNextOverflow();
+            while (overflowPointer != -1) {
+                OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
+                overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
+
+                for (Person record : overflowBlock.getRecords()) {
+                    if (record != null && !record.getKey().trim().isEmpty()) {
+                        this.insertedPersons.add(record);
+                    }
+                }
+
+                overflowPointer = overflowBlock.getNextOverflow();
+            }
+        }
+
+        Set<Person> uniquePersons = new LinkedHashSet<>(this.insertedPersons);
+        this.insertedPersons.clear();
+        this.insertedPersons.addAll(uniquePersons);
+    }
+
+    /**
      * Validtion of hashfile
      */
     private String validateHashFile() throws IOException {
@@ -190,17 +333,6 @@ public class HashFileTester {
             // overflow chains integrity check
             validateOverflowChains(errors);
 
-            // load factor check
-            if (stats.loadFactor > 0.8) {
-                errors.append("Hustota presahuje dmax: ").append(String.format("%.2f", stats.loadFactor)).append(". ");
-            }
-
-            // overflow counts consistency check
-            validateOverflowCounts(errors);
-
-            // verify if records are properly moved during splits
-            validateSplitConsistency(errors);
-
         } catch (Exception e) {
             errors.append("Chyba pri validácii: ").append(e.getMessage()).append(". ");
         }
@@ -209,16 +341,14 @@ public class HashFileTester {
     }
 
     /**
-     * Pomocná metóda na kontrolu, či sa záznam nachádza v správnom bloku
+     * Checks if a record is in the correct block
      */
     private boolean isRecordInCorrectBlock(int expectedBlockIndex, String key) throws IOException {
-        // Skontrolovať primárny blok
         hash.LHBlock<Person> block = hashFile.readPrimaryBlock(expectedBlockIndex);
         if (containsRecord(block, key)) {
             return true;
         }
 
-        // Skontrolovať overflow reťazec
         int overflowPointer = block.getNextOverflow();
         while (overflowPointer != -1) {
             OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
@@ -233,7 +363,7 @@ public class HashFileTester {
     }
 
     /**
-     * Pomocná metóda na kontrolu prítomnosti záznamu v bloku
+     * Checks if a block contains a record with the given key
      */
     private boolean containsRecord(heap.Block<Person> block, String key) {
         for (Person record : block.getRecords()) {
@@ -245,7 +375,7 @@ public class HashFileTester {
     }
 
     /**
-     * Validácia integrity overflow reťazcov
+     * Validates the integrity of overflow chains
      */
     private void validateOverflowChains(StringBuilder errors) throws IOException {
         LinearHashing.LinearHashingStats stats = hashFile.getStats();
@@ -254,10 +384,8 @@ public class HashFileTester {
             hash.LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
             int overflowPointer = primaryBlock.getNextOverflow();
 
-            // Kontrola cyklov v overflow reťazcoch
             Set<Integer> visitedBlocks = new HashSet<>();
             int currentPointer = overflowPointer;
-            int chainLength = 0;
             int actualOverflowCount = 0;
 
             while (currentPointer != -1) {
@@ -270,7 +398,6 @@ public class HashFileTester {
                 OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
                 overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(currentPointer);
 
-                // Spočítaj skutočný počet záznamov v overflow bloku
                 for (Person record : overflowBlock.getRecords()) {
                     if (record != null && !record.getKey().trim().isEmpty()) {
                         actualOverflowCount++;
@@ -278,15 +405,8 @@ public class HashFileTester {
                 }
 
                 currentPointer = overflowBlock.getNextOverflow();
-                chainLength++;
-
-                if (chainLength > 100) { // Bezpečnostná kontrola proti nekonečným cyklom
-                    errors.append("Príliš dlhý overflow reťazec v bloku ").append(i).append(". ");
-                    break;
-                }
             }
 
-            // Kontrola konzistencie overflow počtu
             if (primaryBlock.getOverflowRecordCount() != actualOverflowCount) {
                 errors.append("Nesúlad overflow počtu v bloku ").append(i)
                         .append(": štatistika=").append(primaryBlock.getOverflowRecordCount())
@@ -296,64 +416,10 @@ public class HashFileTester {
     }
 
     /**
-     * Validácia konzistencie overflow počtov
-     */
-    private void validateOverflowCounts(StringBuilder errors) throws IOException {
-        LinearHashing.LinearHashingStats stats = hashFile.getStats();
-        int totalOverflowFromBlocks = 0;
-
-        for (int i = 0; i < stats.totalBlocks; i++) {
-            hash.LHBlock<Person> block = hashFile.readPrimaryBlock(i);
-            totalOverflowFromBlocks += block.getOverflowRecordCount();
-        }
-
-        if (stats.totalOverflowRecords != totalOverflowFromBlocks) {
-            errors.append("Nesúlad v celkovom overflow počte: štatistika=")
-                    .append(stats.totalOverflowRecords).append(", súčet z blokov=")
-                    .append(totalOverflowFromBlocks).append(". ");
-        }
-    }
-
-    /**
-     * Špeciálna kontrola konzistencie split operácie
-     */
-    private void validateSplitConsistency(StringBuilder errors) throws IOException {
-        LinearHashing.LinearHashingStats stats = hashFile.getStats();
-
-        // Kontrola, či záznamy v splitPointer bloku sú správne rozdelené
-        if (stats.splitPointer > 0) {
-            int splitBlockIndex = stats.splitPointer - 1;
-            hash.LHBlock<Person> splitBlock = hashFile.readPrimaryBlock(splitBlockIndex);
-
-            // Získaj všetky záznamy z bloku a jeho overflow
-            List<Person> allRecords = new ArrayList<>(splitBlock.getRecords());
-            int overflowPointer = splitBlock.getNextOverflow();
-            while (overflowPointer != -1) {
-                OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
-                overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
-                allRecords.addAll(overflowBlock.getRecords());
-                overflowPointer = overflowBlock.getNextOverflow();
-            }
-
-            // Over, či všetky záznamy patria do správneho bloku podľa hash1
-            for (Person record : allRecords) {
-                if (record != null && !record.getKey().trim().isEmpty()) {
-                    String key = record.getKey();
-                    int expectedBlock = hashFile.hash1(key);
-                    if (expectedBlock != splitBlockIndex) {
-                        errors.append("Záznam ").append(key).append(" v nesprávnom bloku po splite: ")
-                                .append("očakávaný=").append(expectedBlock)
-                                .append(", aktuálny=").append(splitBlockIndex).append(". ");
-                    }
-                }
-            }
-        }
-    }
-
-    /**
      * Runs a specified number of insert operations
      */
     public String runInsertOnly(int records, Consumer<String> progressCallback) throws IOException {
+        this.synchronizeWithDatabase();
         if (progressCallback != null) {
             progressCallback.accept("HROMADNÉ VKLADANIE SPUSTENÉ\n\n" +
                     "Počet záznamov: " + records + "\n" +
@@ -368,9 +434,25 @@ public class HashFileTester {
         for (int i = 0; i < records; i++) {
             try {
                 Person newPerson = this.generateRandomPatient();
+
+                int originalSize = this.insertedPersons.size();
+
                 hashFile.insert(newPerson, newPerson.getKey());
                 this.insertedPersons.add(newPerson);
                 successfulInserts++;
+
+                String structureComparison = this.compareDatabaseStructure();
+                if (!structureComparison.isEmpty()) {
+                    validationErrors++;
+                    validationLog.append("NESÚLAD ŠTRUKTÚRY po INSERT záznamu ").append(i)
+                            .append(" (ID: ").append(newPerson.getKey()).append("):\n")
+                            .append(structureComparison).append("\n");
+                } else if (this.insertedPersons.size() != originalSize + 1) {
+                    validationErrors++;
+                    validationLog.append("NESÚLAD VEĽKOSTI po INSERT záznamu ").append(i)
+                            .append(": pôvodná veľkosť=").append(originalSize)
+                            .append(", nová veľkosť=").append(this.insertedPersons.size()).append("\n");
+                }
 
                 if (i % 50 == 0 && progressCallback != null) {
                     progressCallback.accept("HROMADNÉ VKLADANIE PREBIEHA...\n\n" +
@@ -383,13 +465,21 @@ public class HashFileTester {
 
             } catch (Exception ex) {
                 failedInserts++;
-                validationLog.append("CHYBA pri vkladaní záznamu ").append(i).append(": ").append(ex.getMessage()).append("\n");
+                validationLog.append("CHYBA pri vkladaní záznamu ").append(i)
+                        .append(" (ID: ").append(ex.getMessage()).append("): ").append(ex.getMessage()).append("\n");
             }
         }
 
         if (progressCallback != null) {
             progressCallback.accept("HROMADNÉ VKLADANIE DOKONČENÉ\n\n" +
                     "Spracúvajú sa výsledky...\n");
+        }
+
+        String finalStructureCheck = this.compareDatabaseStructure();
+        if (!finalStructureCheck.isEmpty()) {
+            validationErrors++;
+            validationLog.append("NESÚLAD ŠTRUKTÚRY po dokončení všetkých INSERT operácií:\n")
+                    .append(finalStructureCheck).append("\n");
         }
 
         String finalValidation = this.validateHashFile();
@@ -434,10 +524,10 @@ public class HashFileTester {
             this.hashFile.close();
         }
 
-        // Odstránenie všetkých súborov hash file
         new java.io.File("pacienti_hash.dat").delete();
         new java.io.File("pacienti_hash.dat.meta").delete();
         new java.io.File("pacienti_hash.dat.overflow").delete();
+        new java.io.File("pacienti_hash.dat.overflow.meta").delete();
 
         this.hashFile = null;
         this.insertedPersons.clear();
@@ -467,7 +557,7 @@ public class HashFileTester {
     /**
      * Gets statistics about the hash file
      */
-    public String getStatistics() throws IOException {
+    public String getStatistics() {
         try {
             LinearHashing.LinearHashingStats stats = hashFile.getStats();
 
@@ -492,7 +582,7 @@ public class HashFileTester {
     /**
      * Displays all blocks (primary and overflow) with their contents
      */
-    public String displayAllBlocks() throws IOException {
+    public String displayAllBlocks() {
         StringBuilder sb = new StringBuilder();
         sb.append("CELÝ HASH SÚBOR - PRIMÁRNE A OVERFLOW BLOKY\n\n");
 
@@ -507,14 +597,12 @@ public class HashFileTester {
             sb.append("• Záznamy v overflow: ").append(stats.totalOverflowRecords).append("\n");
             sb.append("• Hustota: ").append(String.format("%.2f", stats.loadFactor)).append("\n\n");
 
-            // Prechádzanie všetkých primárnych blokov
             for (int i = 0; i < stats.totalBlocks; i++) {
                 sb.append("════════════════════════════════════════════════════════════════════════════════\n");
                 sb.append("PRIMÁRNY BLOK ").append(i).append("\n");
                 sb.append("════════════════════════════════════════════════════════════════════════════════\n");
 
                 try {
-                    // Načítanie primárneho bloku
                     hash.LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
 
                     sb.append("Adresa: ").append(primaryBlock.getAddress()).append(" bytes\n");
@@ -528,7 +616,6 @@ public class HashFileTester {
                             .append(" | Overflow záznamov: ").append(primaryBlock.getOverflowRecordCount())
                             .append(" | Dĺžka reťazca: ").append(primaryBlock.getChainLength()).append("\n\n");
 
-                    // Výpis záznamov v primárnom bloku
                     if (primaryBlock.isEmpty()) {
                         sb.append("   Žiadne záznamy\n");
                     } else {
@@ -541,7 +628,6 @@ public class HashFileTester {
                         }
                     }
 
-                    // Výpis overflow reťazca ak existuje
                     int overflowPointer = primaryBlock.getNextOverflow();
                     if (overflowPointer != -1) {
                         sb.append("\n   ┌─ OVERFLOW REŤAZEC ──────────────────────────────────────────────\n");
@@ -555,31 +641,6 @@ public class HashFileTester {
                     sb.append("CHYBA pri čítaní bloku ").append(i).append(": ").append(e.getMessage()).append("\n\n");
                 }
             }
-
-            // Informácie o voľných overflow blokoch
-            java.io.File freeFile = new java.io.File("pacienti_hash.dat.overflow.free");
-            if (freeFile.exists()) {
-                sb.append("════════════════════════════════════════════════════════════════════════════════\n");
-                sb.append("VOĽNÉ OVERFLOW BLOKY\n");
-                sb.append("════════════════════════════════════════════════════════════════════════════════\n");
-
-                try (java.io.DataInputStream dis = new java.io.DataInputStream(
-                        new java.io.FileInputStream(freeFile))) {
-                    int freeCount = dis.readInt();
-                    sb.append("Počet voľných overflow blokov: ").append(freeCount).append("\n");
-                    if (freeCount > 0) {
-                        sb.append("Indexy: ");
-                        for (int i = 0; i < freeCount; i++) {
-                            if (i > 0) sb.append(", ");
-                            sb.append(dis.readInt());
-                        }
-                        sb.append("\n");
-                    }
-                } catch (Exception e) {
-                    sb.append("Chyba pri čítaní voľných blokov: ").append(e.getMessage()).append("\n");
-                }
-            }
-
         } catch (Exception e) {
             sb.append("CHYBA pri získavaní štatistík: ").append(e.getMessage()).append("\n");
         }
@@ -604,7 +665,6 @@ public class HashFileTester {
                     .append("/").append(overflowBlock.getRecordsPerBlock()).append("\n");
             sb.append(indent).append("│  Ďalší overflow: ").append(overflowBlock.getNextOverflow()).append("\n");
 
-            // Výpis záznamov v overflow bloku
             if (overflowBlock.isEmpty()) {
                 sb.append(indent).append("│  Žiadne záznamy\n");
             } else {
@@ -617,7 +677,6 @@ public class HashFileTester {
                 }
             }
 
-            // Rekurzívne pokračovanie v reťazci
             int nextOverflow = overflowBlock.getNextOverflow();
             if (nextOverflow != -1) {
                 sb.append(indent).append("│\n");

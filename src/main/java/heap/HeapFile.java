@@ -11,6 +11,7 @@ public class HeapFile<T extends Record<T>> {
     private final LinkedList<Integer> partiallyFreeBlocks = new LinkedList<>();
     private final LinkedList<Integer> emptyBlocks = new LinkedList<>();
     private final String metadataFile; // to track block occupancy
+    private boolean metadataChanged = false;
 
     public HeapFile(String filename, int clusterSize, T recordTemplate) throws IOException {
         if (clusterSize < recordTemplate.getSize()) {
@@ -32,7 +33,11 @@ public class HeapFile<T extends Record<T>> {
         // load existing block occupancy metadata
         this.loadBlockLists();
         if (this.file.length() > 0 && this.partiallyFreeBlocks.isEmpty() && this.emptyBlocks.isEmpty()) {
-            this.initializeBlockLists();
+            for (int i = 0; i < this.getBlockCount(); i++) {
+                Block<T> b = readBlock(i);
+                this.updateBlockLists(i, b);
+            }
+            this.metadataChanged = true;
         }
     }
 
@@ -40,6 +45,8 @@ public class HeapFile<T extends Record<T>> {
      * Saves current block occupancy lists to metadata file
      */
     private void saveBlockLists() throws IOException {
+        if (!this.metadataChanged) return;
+
         int blockCount = this.getBlockCount();
         this.partiallyFreeBlocks.removeIf(idx -> idx < 0 || idx >= blockCount);
         this.emptyBlocks.removeIf(idx -> idx < 0 || idx >= blockCount);
@@ -54,6 +61,7 @@ public class HeapFile<T extends Record<T>> {
             dos.writeInt(this.emptyBlocks.size());
             for (int b : this.emptyBlocks) dos.writeInt(b);
         }
+        this.metadataChanged = false;
     }
 
     /**
@@ -61,7 +69,10 @@ public class HeapFile<T extends Record<T>> {
      */
     private void loadBlockLists() throws IOException {
         File meta = new File(this.metadataFile);
-        if (!meta.exists()) return;
+        if (!meta.exists()) {
+            this.metadataChanged = true;
+            return;
+        }
 
         try (DataInputStream dis = new DataInputStream(new FileInputStream(meta))) {
             int savedCluster = dis.readInt();
@@ -70,6 +81,7 @@ public class HeapFile<T extends Record<T>> {
             if (savedCluster != this.getClusterSize() || savedRecordsPerBlock != this.getRecordsPerBlock()) {
                 this.partiallyFreeBlocks.clear();
                 this.emptyBlocks.clear();
+                this.metadataChanged = true;
                 return;
             }
 
@@ -95,24 +107,12 @@ public class HeapFile<T extends Record<T>> {
         } catch (EOFException e) {
             this.partiallyFreeBlocks.clear();
             this.emptyBlocks.clear();
-            this.saveBlockLists();
+            this.metadataChanged = true;
         } catch (Exception e) {
             System.out.println("Error loading metadata: " + e.getMessage() + "; recreating");
             this.partiallyFreeBlocks.clear();
             this.emptyBlocks.clear();
-            this.saveBlockLists();
-        }
-    }
-
-    /**
-     * Scans all blocks in the file to build initial occupancy lists
-     * Used when metadata is missing or corrupted
-     */
-    private void initializeBlockLists() throws IOException {
-        int blockCount = getBlockCount();
-        for (int i = 0; i < blockCount; i++) {
-            Block<T> b = readBlock(i);
-            this.updateBlockLists(i, b);
+            this.metadataChanged = true;
         }
     }
 
@@ -133,6 +133,8 @@ public class HeapFile<T extends Record<T>> {
         }
         Collections.sort(this.emptyBlocks);
         Collections.sort(this.partiallyFreeBlocks);
+
+        this.metadataChanged = true;
     }
 
     /**
@@ -150,7 +152,6 @@ public class HeapFile<T extends Record<T>> {
         }
         this.writeBlock(blockIndex, block);
         this.updateBlockLists(blockIndex, block);
-        this.saveBlockLists();
         return blockIndex;
     }
 
@@ -182,8 +183,6 @@ public class HeapFile<T extends Record<T>> {
             if (block.isEmpty() && isLastBlock(blockIndex)) {
                 this.removeEmptyBlocksFromEnd();
             }
-
-            this.saveBlockLists();
         }
         return removed;
     }
@@ -191,7 +190,7 @@ public class HeapFile<T extends Record<T>> {
     /**
      * Removes empty blocks from the end of the file
      */
-    private void removeEmptyBlocksFromEnd() throws IOException {
+    protected void removeEmptyBlocksFromEnd() throws IOException {
         int blockCount = this.getBlockCount();
         if (blockCount == 0) return;
 
@@ -220,11 +219,12 @@ public class HeapFile<T extends Record<T>> {
             this.emptyBlocks.removeIf(index -> index >= newBlockCount);
             this.partiallyFreeBlocks.removeIf(index -> index >= newBlockCount);
 
+            this.metadataChanged = true;
+
             // remove metadata file if entire file is empty
             if (newBlockCount == 0) {
                 new File(this.metadataFile).delete();
             }
-            this.saveBlockLists();
         }
     }
 
@@ -356,11 +356,11 @@ public class HeapFile<T extends Record<T>> {
         return this.templateBlock.getBlockSize();
     }
 
-    public T getRecordTemplate() {
+    protected T getRecordTemplate() {
         return this.templateBlock.getRecordTemplate();
     }
 
-    public RandomAccessFile getFile() {
+    protected RandomAccessFile getFile() {
         return file;
     }
 }

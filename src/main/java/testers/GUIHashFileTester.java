@@ -28,7 +28,6 @@ public class GUIHashFileTester {
      * Initializes hash file and operation generator instances
      */
     private static void initializeApplication() throws IOException {
-        // M = 2 (základný počet skupín), primary block size = 256, overflow block size = 128
         hashFile = new LinearHashing<>("pacienti_hash.dat", 256, 128, new Person(), 2);
         hashFileTester = new HashFileTester(hashFile);
     }
@@ -38,7 +37,26 @@ public class GUIHashFileTester {
      */
     private static void createAndShowGUI() {
         JFrame frame = new JFrame("Databáza pacientov - Lineárne Hešovanie");
-        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+
+        frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+
+        frame.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent windowEvent) {
+                try {
+                    if (hashFile != null) {
+                        hashFile.close();
+                    }
+                    frame.dispose();
+                    System.exit(0);
+                } catch (IOException ex) {
+                    JOptionPane.showMessageDialog(frame,
+                            "Chyba pri ukladaní dát: " + ex.getMessage(),
+                            "Chyba", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        });
+
         frame.setSize(1000, 700);
 
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
@@ -291,11 +309,11 @@ public class GUIHashFileTester {
             sb.append("\t- Veľkosť: ").append(metaFile.exists() ? metaFile.length() : 0).append(" bytes\n\n");
 
             sb.append("• ŠTRUKTÚRA BLOKOV:\n");
-            sb.append("\t- Primárny blok: ").append(256).append(" bytes\n");
-            sb.append("\t- Overflow blok: ").append(128).append(" bytes\n");
+            sb.append("\t- Primárny blok: ").append(hashFile.getClusterSize()).append(" bytes\n");
+            sb.append("\t- Overflow blok: ").append(hashFile.getOverflowFile().getClusterSize()).append(" bytes\n");
             sb.append("\t- Veľkosť záznamu: ").append(person.getSize()).append(" bytes\n");
-            sb.append("\t- Záznamov v primárnom bloku: ").append(256 / person.getSize()).append("\n");
-            sb.append("\t- Záznamov v overflow bloku: ").append(128 / person.getSize()).append("\n");
+            sb.append("\t- Záznamov v primárnom bloku: ").append(hashFile.getClusterSize() / person.getSize()).append("\n");
+            sb.append("\t- Záznamov v overflow bloku: ").append(hashFile.getOverflowFile().getClusterSize() / person.getSize()).append("\n");
 
             area.setText(sb.toString());
 

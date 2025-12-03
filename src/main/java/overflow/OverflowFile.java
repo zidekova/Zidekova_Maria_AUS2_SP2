@@ -82,6 +82,10 @@ public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
         block.setNextOverflow(-1);
         this.writeOverflowBlock(block);
         this.usedOverflowBlocks--;
+
+        if (index == this.getBlockCount() - 1) {
+            this.removeEmptyBlocksFromEnd();
+        }
     }
 
     /**
@@ -120,24 +124,20 @@ public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
             currentIndex = currentBlock.getNextOverflow();
         }
 
-        // if all block are full, add new block to end of chain
-        if (lastBlock != null) {
-            int newBlockIndex = this.allocateOverflowBlock();
-            OverflowBlock<T> newBlock = this.readOverflowBlock(newBlockIndex);
+        // if all blocks are full, add new block to end of chain
+        int newBlockIndex = this.allocateOverflowBlock();
+        OverflowBlock<T> newBlock = this.readOverflowBlock(newBlockIndex);
 
-            if (newBlock.addRecord(record) != -1) {
-                lastBlock.setNextOverflow(newBlockIndex);
-                this.writeOverflowBlock(lastBlock);
-                this.writeOverflowBlock(newBlock);
-                return firstOverflowIndex;
-            } else {
-                // if failed to add, mark as empty
-                this.markOverflowBlockAsEmpty(newBlockIndex);
-                throw new IOException("Failed to add record to new overflow block");
-            }
+        if (newBlock.addRecord(record) != -1) {
+            lastBlock.setNextOverflow(newBlockIndex);
+            this.writeOverflowBlock(lastBlock);
+            this.writeOverflowBlock(newBlock);
+            return firstOverflowIndex;
+        } else {
+            // if failed to add, mark as empty
+            this.markOverflowBlockAsEmpty(newBlockIndex);
+            throw new IOException("Failed to add record to new overflow block");
         }
-
-        throw new IOException("Error in overflow chain management");
     }
 
     /**

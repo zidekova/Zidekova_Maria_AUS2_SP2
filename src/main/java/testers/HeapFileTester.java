@@ -14,6 +14,7 @@ public class HeapFileTester {
 
     private HeapFile<Person> heap;
     private final List<Person> insertedPersons;
+    private int patientCounter = 1;
 
     public HeapFileTester(HeapFile<Person> heap) {
         this.heap = heap;
@@ -31,6 +32,8 @@ public class HeapFileTester {
         int validationErrors = 0;
 
         StringBuilder validationLog = new StringBuilder();
+
+        this.synchronizeWithDatabase();
 
         if (progressCallback != null) {
             progressCallback.accept("NÁHODNÉ OPERÁCIE SPUSTENÉ\n\n" +
@@ -60,9 +63,24 @@ public class HeapFileTester {
                         boolean hadPartiallyFree = this.hasPartiallyFreeBlocks();
                         boolean hadEmpty = this.hasEmptyBlocks();
 
+                        int originalSize = this.insertedPersons.size();
+
                         int insertedBlock = this.heap.insert(newPerson);
                         this.insertedPersons.add(newPerson);
                         insertCount++;
+
+                        String structureComparison = this.compareDatabaseStructure();
+                        if (!structureComparison.isEmpty()) {
+                            validationErrors++;
+                            validationLog.append("NESÚLAD ŠTRUKTÚRY po INSERT v operácii ").append(i)
+                                    .append(" (záznam ").append(newPerson.getId()).append("):\n")
+                                    .append(structureComparison).append("\n");
+                        } else if (this.insertedPersons.size() != originalSize + 1) {
+                            validationErrors++;
+                            validationLog.append("NESÚLAD VEĽKOSTI po INSERT v operácii ").append(i)
+                                    .append(": pôvodná veľkosť=").append(originalSize)
+                                    .append(", nová veľkosť=").append(this.insertedPersons.size()).append("\n");
+                        }
 
                         String insertValidation = this.validateInsertStrategy(hadPartiallyFree, hadEmpty, blockIndexBefore, insertedBlock);
                         if (!insertValidation.isEmpty()) {
@@ -77,12 +95,16 @@ public class HeapFileTester {
                         }
 
                         Person toFind = this.getRandomElement(this.insertedPersons);
+                        boolean found = false;
+                        Person foundRecord = null;
 
                         int maxBlocks = Math.max(1, this.heap.getBlockCount());
                         for (int block = 0; block < maxBlocks; block++) {
                             try {
                                 Person result = this.heap.get(block, toFind);
                                 if (result != null && result.equals(toFind)) {
+                                    found = true;
+                                    foundRecord = result;
                                     break;
                                 }
                             } catch (IllegalArgumentException e) {
@@ -91,6 +113,24 @@ public class HeapFileTester {
                         }
 
                         findCount++;
+
+                        if (!found) {
+                            validationLog.append("CHYBA VYHĽADÁVANIA pri operácii ").append(i)
+                                    .append(": Nenašiel sa záznam ").append(toFind.getId()).append("\n");
+
+                            String structureComparison = this.compareDatabaseStructure();
+                            if (!structureComparison.isEmpty()) {
+                                validationErrors++;
+                                validationLog.append("NESÚLAD ŠTRUKTÚRY po chybnom FIND v operácii ").append(i)
+                                        .append(" (záznam ").append(toFind.getId()).append("):\n")
+                                        .append(structureComparison).append("\n");
+                            }
+                        } else if (!foundRecord.equals(toFind)) {
+                            validationErrors++;
+                            validationLog.append("NEKONZISTENTNÝ ZÁZNAM pri FIND v operácii ").append(i)
+                                    .append(": očakávaný ").append(toFind)
+                                    .append(", nájdený ").append(foundRecord).append("\n");
+                        }
                     }
 
                     case 2 -> { // delete
@@ -104,8 +144,26 @@ public class HeapFileTester {
                         deleteCount++;
                         if (deleted) {
                             this.insertedPersons.remove(toDelete);
+
+                            String structureComparison = this.compareDatabaseStructure();
+                            if (!structureComparison.isEmpty()) {
+                                validationErrors++;
+                                validationLog.append("NESÚLAD ŠTRUKTÚRY po úspešnom DELETE v operácii ").append(i)
+                                        .append(" (záznam ").append(toDelete.getId()).append("):\n")
+                                        .append(structureComparison).append("\n");
+                            }
                         } else {
-                            errors++;
+                            String structureComparison = this.compareDatabaseStructure();
+                            if (!structureComparison.isEmpty()) {
+                                validationErrors++;
+                                validationLog.append("NESÚLAD ŠTRUKTÚRY po neúspešnom DELETE v operácii ").append(i)
+                                        .append(" (záznam ").append(toDelete.getId()).append("):\n")
+                                        .append(structureComparison).append("\n");
+                            } else {
+                                errors++;
+                                validationLog.append("CHYBA MAZANIA pri operácii ").append(i)
+                                        .append(": Neodstránil sa záznam ").append(toDelete.getId()).append("\n");
+                            }
                         }
                     }
                 }
@@ -154,6 +212,50 @@ public class HeapFileTester {
         }
 
         return result.toString();
+    }
+
+    /**
+     * Compares the actual database structure with the internal list
+     */
+    private String compareDatabaseStructure() throws IOException {
+        StringBuilder differences = new StringBuilder();
+
+        List<Person> databaseRecords = new ArrayList<>();
+
+        int blockCount = this.heap.getBlockCount();
+        for (int i = 0; i < blockCount; i++) {
+            Block<Person> block = this.heap.readBlock(i);
+            for (Person record : block.getRecords()) {
+                if (record != null && !record.getId().trim().isEmpty()) {
+                    databaseRecords.add(record);
+                }
+            }
+        }
+
+        Set<Person> databaseSet = new HashSet<>(databaseRecords);
+        Set<Person> insertedSet = new HashSet<>(insertedPersons);
+
+        for (Person person : insertedPersons) {
+            if (!databaseSet.contains(person)) {
+                differences.append("Záznam chýba v databáze: ").append(person.getId()).append(" - ").append(person).append("\n");
+            }
+        }
+
+        for (Person record : databaseRecords) {
+            if (!insertedSet.contains(record)) {
+                differences.append("Nepovolený záznam v databáze: ").append(record.getId()).append(" - ").append(record).append("\n");
+            }
+        }
+
+        if (insertedPersons.size() != databaseRecords.size()) {
+            differences.append("Nesúlad v počte záznamov: insertedPersons=")
+                    .append(insertedPersons.size())
+                    .append(", databáza=")
+                    .append(databaseRecords.size())
+                    .append("\n");
+        }
+
+        return differences.toString();
     }
 
     /**
@@ -253,20 +355,6 @@ public class HeapFileTester {
             }
         }
 
-        Set<String> allIds = new HashSet<>();
-        for (int i = 0; i < blockCount; i++) {
-            Block<Person> block = this.heap.readBlock(i);
-            for (Person record : block.getRecords()) {
-                if (record != null && !record.getId().trim().isEmpty()) {
-                    String id = record.getId();
-                    if (allIds.contains(id)) {
-                        errors.append("Duplicitné ID ").append(id).append(" v bloku ").append(i).append(". ");
-                    }
-                    allIds.add(id);
-                }
-            }
-        }
-
         return errors.toString();
     }
 
@@ -274,6 +362,7 @@ public class HeapFileTester {
      * Runs a specified number of insert operations
      */
     public String runInsertOnly(int records, Consumer<String> progressCallback) throws IOException {
+        this.synchronizeWithDatabase();
         if (progressCallback != null) {
             progressCallback.accept("HROMADNÉ VKLADANIE SPUSTENÉ\n\n" +
                     "Počet záznamov: " + records + "\n" +
@@ -292,14 +381,30 @@ public class HeapFileTester {
                 boolean hadPartiallyFree = this.hasPartiallyFreeBlocks();
                 boolean hadEmpty = this.hasEmptyBlocks();
 
+                int originalSize = this.insertedPersons.size();
+
                 int insertedBlock = this.heap.insert(newPerson);
                 this.insertedPersons.add(newPerson);
                 successfulInserts++;
 
+                String structureComparison = this.compareDatabaseStructure();
+                if (!structureComparison.isEmpty()) {
+                    validationErrors++;
+                    validationLog.append("NESÚLAD ŠTRUKTÚRY po INSERT záznamu ").append(i)
+                            .append(" (ID: ").append(newPerson.getId()).append("):\n")
+                            .append(structureComparison).append("\n");
+                } else if (this.insertedPersons.size() != originalSize + 1) {
+                    validationErrors++;
+                    validationLog.append("NESÚLAD VEĽKOSTI po INSERT záznamu ").append(i)
+                            .append(": pôvodná veľkosť=").append(originalSize)
+                            .append(", nová veľkosť=").append(this.insertedPersons.size()).append("\n");
+                }
+
                 String validation = this.validateInsertStrategy(hadPartiallyFree, hadEmpty, blockIndexBefore, insertedBlock);
                 if (!validation.isEmpty()) {
                     validationErrors++;
-                    validationLog.append("CHYBA VKLADANIA pri operácii ").append(i).append(": ").append(validation).append("\n");
+                    validationLog.append("CHYBA VKLADANIA pri operácii ").append(i)
+                            .append(" (ID: ").append(newPerson.getId()).append("): ").append(validation).append("\n");
                 }
 
                 if (i % 50 == 0 && progressCallback != null) {
@@ -313,12 +418,21 @@ public class HeapFileTester {
 
             } catch (Exception ex) {
                 failedInserts++;
+                validationLog.append("CHYBA pri vkladaní záznamu ").append(i)
+                        .append(": ").append(ex.getMessage()).append("\n");
             }
         }
 
         if (progressCallback != null) {
             progressCallback.accept("HROMADNÉ VKLADANIE DOKONČENÉ\n\n" +
                     "Spracúvajú sa výsledky...\n");
+        }
+
+        String finalStructureCheck = this.compareDatabaseStructure();
+        if (!finalStructureCheck.isEmpty()) {
+            validationErrors++;
+            validationLog.append("NESÚLAD ŠTRUKTÚRY po dokončení všetkých INSERT operácií:\n")
+                    .append(finalStructureCheck).append("\n");
         }
 
         String finalValidation = this.validateHeapFile();
@@ -345,6 +459,28 @@ public class HeapFileTester {
         }
 
         return result.toString();
+    }
+
+    /**
+     * Synchronizes the internal list with actual database state
+     */
+    public void synchronizeWithDatabase() throws IOException {
+        this.insertedPersons.clear();
+
+        int blockCount = this.heap.getBlockCount();
+        for (int i = 0; i < blockCount; i++) {
+            Block<Person> block = this.heap.readBlock(i);
+
+            for (Person record : block.getRecords()) {
+                if (record != null && !record.getId().trim().isEmpty()) {
+                    this.insertedPersons.add(record);
+                }
+            }
+        }
+
+        Set<Person> uniquePersons = new LinkedHashSet<>(this.insertedPersons);
+        this.insertedPersons.clear();
+        this.insertedPersons.addAll(uniquePersons);
     }
 
     /**
@@ -396,7 +532,7 @@ public class HeapFileTester {
         String name = NAMES[random.nextInt(NAMES.length)];
         String surname = SURNAMES[random.nextInt(SURNAMES.length)];
         LocalDate date = LocalDate.of(1970 + random.nextInt(40), 1 + random.nextInt(12), 1 + random.nextInt(28));
-        String id = "P" + (10000 + random.nextInt(90000));
+        String id = String.format("%06d", patientCounter++);
         return new Person(name, surname, date, id);
     }
 }

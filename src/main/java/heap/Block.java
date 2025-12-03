@@ -32,19 +32,11 @@ public class Block<T extends data.Record<T>> {
         return this.recordsPerBlock;
     }
 
-    public long getByteOffset() {
-        return (long) this.address * (long) this.blockSize;
-    }
-
     /**
      * Returns the number of currently valid records in the block
      */
     public int getValidCount() {
         return this.validCount;
-    }
-
-    protected void setValidCount(int count) {
-        this.validCount = count;
     }
 
     public int getBlockSize() { return blockSize; }
@@ -75,7 +67,6 @@ public class Block<T extends data.Record<T>> {
         }
 
         for (int i = 0; i < this.recordsPerBlock; i++) {
-            // Kontrola či je slot skutočne voľný
             if (this.records[i] == null || isEmptyRecord(this.records[i])) {
                 this.records[i] = record;
                 this.validCount++;

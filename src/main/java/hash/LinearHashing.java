@@ -3,6 +3,7 @@ package hash;
 import heap.Block;
 import heap.HeapFile;
 import data.Record;
+import overflow.OverflowBlock;
 import overflow.OverflowFile;
 
 import java.io.*;
@@ -22,12 +23,13 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
 
     private final OverflowFile<T> overflowFile;
     private final String metadataFile;
+    private boolean metadataChanged = false;
 
     public LinearHashing(String filename, int primaryBlockSize, int overflowBlockSize, T recordTemplate, int initialM) throws IOException {
         super(filename, primaryBlockSize, recordTemplate);
         this.M = initialM;
         this.metadataFile = filename + ".meta";
-        this.overflowFile = new OverflowFile<>(filename, overflowBlockSize, recordTemplate);
+        this.overflowFile = new OverflowFile<>(filename + ".overflow", overflowBlockSize, recordTemplate);
         this.loadMetadata();
         if (this.getFile().length() == 0) {
             this.initializeFile();
@@ -39,7 +41,10 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
      */
     private void loadMetadata() throws IOException {
         File metadata = new File(this.metadataFile);
-        if (!metadata.exists()) return;
+        if (!metadata.exists()) {
+            this.metadataChanged = true;
+            return;
+        }
 
         try (DataInputStream dis = new DataInputStream(new FileInputStream(metadata))) {
             this.level = dis.readInt();
@@ -52,11 +57,14 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
      * Saves current metadata to the metadata file.
      */
     private void saveMetadata() throws IOException {
+        if (!this.metadataChanged) return;
+
         try (DataOutputStream dos = new DataOutputStream(new FileOutputStream(this.metadataFile))) {
             dos.writeInt(this.level);
             dos.writeInt(this.splitPointer);
             dos.writeInt(this.totalRecords);
         }
+        this.metadataChanged = false;
     }
 
     /**
@@ -67,7 +75,7 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
             LHBlock<T> block = (LHBlock<T>) this.createBlock(i);
             this.writeBlock(i, block);
         }
-        this.saveMetadata();
+        this.metadataChanged = true;
     }
 
     /**
@@ -89,7 +97,7 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
      */
     public int hash0(String key) {
         int mod = this.M * (int) Math.pow(2, this.level);
-        return key.hashCode() % mod;
+        return Math.abs(key.hashCode()) % mod;
     }
 
     /**
@@ -97,7 +105,7 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
      */
     public int hash1(String key) {
         int mod = this.M * (int) Math.pow(2, this.level + 1);
-        return key.hashCode() % mod;
+        return Math.abs(key.hashCode()) % mod;
     }
 
     /**
@@ -124,17 +132,17 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
             if (firstOverflow == -1) {
                 primaryBlock.setNextOverflow(newFirstOverflow);
             }
-            primaryBlock.setOverflowRecordCount(primaryBlock.getOverflowRecordCount() + 1);
+
+            this.updateOverflowCount(primaryBlock);
         }
         this.writeBlock(blockIndex, primaryBlock);
         this.totalRecords++;
+        this.metadataChanged = true;
 
         // check and perform splits based on load factor
         while (this.getLoadFactor() > D_MAX) {
             this.split();
         }
-
-        this.saveMetadata();
     }
 
     /**
@@ -171,19 +179,40 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
         if (deleted) {
             this.writeBlock(blockIndex, primaryBlock);
             this.totalRecords--;
+            this.metadataChanged = true;
+
+            this.compactBlock(blockIndex);
         } else {
             // delete from overflow chain
             int firstOverflow = primaryBlock.getNextOverflow();
             if (firstOverflow != -1) {
                 // pass-by-reference
                 int[] overflowHolder = new int[]{firstOverflow};
+                int overflowRecordsBefore = primaryBlock.getOverflowRecordCount();
+
                 deleted = this.overflowFile.deleteFromChain(overflowHolder, key);
 
                 if (deleted) {
                     primaryBlock.setNextOverflow(overflowHolder[0]);
-                    primaryBlock.setOverflowRecordCount(Math.max(0, primaryBlock.getOverflowRecordCount() - 1));
+
+                    int chainLength = this.calculateChainLength(primaryBlock.getNextOverflow());
+
+                    int actualOverflowRecords = 0;
+                    int currentOverflow = primaryBlock.getNextOverflow();
+                    while (currentOverflow != -1) {
+                        OverflowBlock<T> overflowBlock = this.overflowFile.readOverflowBlock(currentOverflow);
+                        actualOverflowRecords += overflowBlock.getValidCount();
+                        currentOverflow = overflowBlock.getNextOverflow();
+                    }
+
+                    primaryBlock.setOverflowRecordCount(actualOverflowRecords);
+                    primaryBlock.setChainLength(chainLength);
+
                     this.writeBlock(blockIndex, primaryBlock);
                     this.totalRecords--;
+                    this.metadataChanged = true;
+
+                    this.compactBlock(blockIndex);
                 }
             }
         }
@@ -193,7 +222,6 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
             while (this.primaryBlocksCount() > this.M && this.getLoadFactor() < D_MIN) {
                 this.merge();
             }
-            this.saveMetadata();
         }
 
         return deleted;
@@ -230,6 +258,7 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
         primaryBlock.clearRecords();
         primaryBlock.setNextOverflow(-1);
         primaryBlock.setOverflowRecordCount(0);
+        primaryBlock.setChainLength(0);
 
         for (T record : allRecords) {
             int h1 = this.hash1(record.getKey());
@@ -239,32 +268,36 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
                 if (primaryBlock.addRecord(record) == -1) {
                     int fo = primaryBlock.getNextOverflow();
                     int nf = this.overflowFile.addToChain(fo, record);
-                    if (fo == -1) primaryBlock.setNextOverflow(nf);
-                    primaryBlock.setOverflowRecordCount(primaryBlock.getOverflowRecordCount() + 1);
+                    if (fo == -1) {
+                        primaryBlock.setNextOverflow(nf);
+                    }
                 }
             } else {
                 // otherwise -> goes to new block
                 if (newBlock.addRecord(record) == -1) {
                     int fo = newBlock.getNextOverflow();
-                    int nf = this.overflowFile.addToChain( fo, record);
-                    if (fo == -1) newBlock.setNextOverflow(nf);
-                    newBlock.setOverflowRecordCount(newBlock.getOverflowRecordCount() + 1);
+                    int nf = this.overflowFile.addToChain(fo, record);
+                    if (fo == -1) {
+                        newBlock.setNextOverflow(nf);
+                    }
                 }
             }
         }
+
+        this.updateOverflowCount(primaryBlock);
+        this.updateOverflowCount(newBlock);
 
         this.writeBlock(blockToSplit, primaryBlock);
         this.writeBlock(newBlockIndex, newBlock);
 
         this.splitPointer++;
+        this.metadataChanged = true;
 
         // check if it's full expansion
         if (this.splitPointer >= this.M * (int) Math.pow(2, this.level)) {
             this.level++;
             this.splitPointer = 0;
         }
-
-        this.saveMetadata();
     }
 
     /**
@@ -288,12 +321,108 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
         block.clearRecords();
         block.setNextOverflow(-1);
         block.setOverflowRecordCount(0);
+        block.setChainLength(0);
         this.writeBlock(sourceBlockIndex, block);
 
         if (this.splitPointer == 0) this.level--;
         this.splitPointer = targetBlockIndex;
+        this.metadataChanged = true;
 
-        this.saveMetadata();
+        LHBlock<T> targetBlock = this.readPrimaryBlock(targetBlockIndex);
+        this.updateOverflowCount(targetBlock);
+        this.writeBlock(targetBlockIndex, targetBlock);
+
+        this.removeEmptyBlocksFromEnd();
+        this.metadataChanged = true;
+    }
+
+    /**
+     * Updates overflowRecordCount in block
+     */
+    private void updateOverflowCount(LHBlock<T> block) throws IOException {
+        int actualOverflowRecords = 0;
+        int currentOverflow = block.getNextOverflow();
+        int overflowBlockCount = this.overflowFile.getBlockCount();
+
+        while (currentOverflow != -1) {
+            if (currentOverflow < 0 || currentOverflow >= overflowBlockCount) {
+                break;
+            }
+
+            OverflowBlock<T> overflowBlock = this.overflowFile.readOverflowBlock(currentOverflow);
+            actualOverflowRecords += overflowBlock.getValidCount();
+            currentOverflow = overflowBlock.getNextOverflow();
+        }
+        block.setOverflowRecordCount(actualOverflowRecords);
+        block.setChainLength(this.calculateChainLength(block.getNextOverflow()));
+    }
+
+
+    /**
+     * Tries to free as many blocks as possible
+     */
+    private void compactBlock(int primaryBlockIndex) throws IOException {
+        LHBlock<T> primaryBlock = this.readPrimaryBlock(primaryBlockIndex);
+        int firstOverflow = primaryBlock.getNextOverflow();
+        int freeSpace = primaryBlock.getBlockSize() - primaryBlock.getValidCount();
+
+        if (firstOverflow == -1 || freeSpace <= 0) {
+            return;
+        }
+
+        List<T> overflowRecords = this.overflowFile.collectAllFromChain(firstOverflow);
+
+        this.overflowFile.clearChain(firstOverflow);
+        primaryBlock.setNextOverflow(-1);
+        primaryBlock.setOverflowRecordCount(0);
+        primaryBlock.setChainLength(0);
+
+        List<T> allRecords = new ArrayList<>(primaryBlock.getRecords());
+        primaryBlock.clearRecords();
+
+        allRecords.addAll(overflowRecords);
+
+        for (T record : allRecords) {
+            if (primaryBlock.addRecord(record) == -1) {
+                int fo = primaryBlock.getNextOverflow();
+                int nf = this.overflowFile.addToChain(fo, record);
+                if (fo == -1) {
+                    primaryBlock.setNextOverflow(nf);
+                }
+            }
+        }
+
+        this.updateOverflowCount(primaryBlock);
+
+        this.writeBlock(primaryBlockIndex, primaryBlock);
+    }
+
+    /**
+     * Deletes empty blocks from the end of the hashfile
+     */
+    private void trimPrimaryBlocks() throws IOException {
+        int blockCount = this.primaryBlocksCount();
+        int totalBlocks = this.getBlockCount();
+
+        if (totalBlocks > blockCount) {
+            boolean allEmpty = true;
+            for (int i = blockCount; i < totalBlocks; i++) {
+                try {
+                    Block<T> block = this.readBlock(i);
+                    if (!block.isEmpty()) {
+                        allEmpty = false;
+                        break;
+                    }
+                } catch (Exception e) {
+                    break;
+                }
+            }
+
+            if (allEmpty) {
+                this.removeEmptyBlocksFromEnd();
+                this.metadataChanged = true;
+            }
+        }
     }
 
     /**
@@ -318,20 +447,37 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
                 if (firstOverflow == -1) {
                     targetBlock.setNextOverflow(newFirstOverflow);
                 }
-                targetBlock.setOverflowRecordCount(targetBlock.getOverflowRecordCount() + 1);
             }
         }
-
+        this.updateOverflowCount(targetBlock);
         this.writeBlock(targetIndex, targetBlock);
     }
 
+    /**
+     * Calculates the length of an overflow chain.
+     */
+    private int calculateChainLength(int firstOverflowIndex) throws IOException {
+        if (firstOverflowIndex == -1) {
+            return 0;
+        }
+
+        int length = 0;
+        int currentIndex = firstOverflowIndex;
+
+        while (currentIndex != -1) {
+            length++;
+            OverflowBlock<T> block = this.overflowFile.readOverflowBlock(currentIndex);
+            currentIndex = block.getNextOverflow();
+        }
+
+        return length;
+    }
 
     /**
      * Reads a primary block, creating it if it doesn't exist.
      */
     public LHBlock<T> readPrimaryBlock(int index) throws IOException {
         if (index >= this.getBlockCount()) {
-            // create new empty block
             LHBlock<T> empty = (LHBlock<T>) this.createBlock(index);
             empty.clearRecords();
             empty.setNextOverflow(-1);
@@ -345,7 +491,11 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
             lhBlock.fromBytes(genericBlock.getBytes());
             return lhBlock;
         } catch (Exception e) {
-            return (LHBlock<T>) this.createBlock(index);
+            LHBlock<T> empty = (LHBlock<T>) this.createBlock(index);
+            empty.clearRecords();
+            empty.setNextOverflow(-1);
+            empty.setOverflowRecordCount(0);
+            return empty;
         }
     }
 
@@ -429,7 +579,7 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
     @Override
     public void close() throws IOException {
         this.saveMetadata();
-        this.overflowFile.close();
-        super.close();
+        if (this.overflowFile != null) this.overflowFile.close();
+        super.getFile().close();
     }
 }
