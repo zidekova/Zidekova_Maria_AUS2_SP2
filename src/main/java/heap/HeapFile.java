@@ -26,19 +26,8 @@ public class HeapFile<T extends Record<T>> {
         this.file = new RandomAccessFile(filename, "rw");
         this.metadataFile = filename + ".meta";
 
-        System.out.println("HeapFile init: block=" + getClusterSize() +
-                ", recSize=" + getRecordTemplate().getSize() +
-                ", recPerBlock=" + getRecordsPerBlock());
-
         // load existing block occupancy metadata
         this.loadBlockLists();
-        if (this.file.length() > 0 && this.partiallyFreeBlocks.isEmpty() && this.emptyBlocks.isEmpty()) {
-            for (int i = 0; i < this.getBlockCount(); i++) {
-                Block<T> b = readBlock(i);
-                this.updateBlockLists(i, b);
-            }
-            this.metadataChanged = true;
-        }
     }
 
     /**
@@ -67,7 +56,7 @@ public class HeapFile<T extends Record<T>> {
     /**
      * Loads block occupancy lists from metadata file
      */
-    private void loadBlockLists() throws IOException {
+    private void loadBlockLists() {
         File meta = new File(this.metadataFile);
         if (!meta.exists()) {
             this.metadataChanged = true;
@@ -119,7 +108,7 @@ public class HeapFile<T extends Record<T>> {
     /**
      * Updates block occupancy lists based on a blocks current state
      */
-    private void updateBlockLists(int blockIndex, Block<T> block) {
+    protected void updateBlockLists(int blockIndex, Block<T> block) {
         boolean isEmpty = block.isEmpty();
         boolean hasSpace = block.hasSpace() && !isEmpty;
 
@@ -194,24 +183,14 @@ public class HeapFile<T extends Record<T>> {
         int blockCount = this.getBlockCount();
         if (blockCount == 0) return;
 
-        int lastNonEmptyBlock = -1;
-        for (int i = blockCount - 1; i >= 0; i--) {
-            Block<T> block = this.readBlock(i);
-            if (!block.isEmpty()) {
-                lastNonEmptyBlock = i;
-                break;
-            }
+        int lastBlockIndex = blockCount - 1;
+
+        while (lastBlockIndex >= 0 && this.emptyBlocks.contains(lastBlockIndex)) {
+            lastBlockIndex--;
         }
 
-        int newBlockCount;
-        if (lastNonEmptyBlock == -1) {
-            // whole file is empty
-            newBlockCount = 0;
-        } else {
-            newBlockCount = lastNonEmptyBlock + 1;
-        }
+        int newBlockCount = lastBlockIndex + 1;
 
-        // truncate file if we can remove empty blocks from end
         if (newBlockCount < blockCount) {
             long newLength = (long) newBlockCount * this.getClusterSize();
             this.file.setLength(newLength);
@@ -221,7 +200,6 @@ public class HeapFile<T extends Record<T>> {
 
             this.metadataChanged = true;
 
-            // remove metadata file if entire file is empty
             if (newBlockCount == 0) {
                 new File(this.metadataFile).delete();
             }
@@ -290,34 +268,28 @@ public class HeapFile<T extends Record<T>> {
     private int findBestBlockForInsert() throws IOException {
         int blockCount = this.getBlockCount();
 
-        Iterator<Integer> itPart = this.partiallyFreeBlocks.iterator();
-        while (itPart.hasNext()) {
-            int idx = itPart.next();
+        while (!this.partiallyFreeBlocks.isEmpty()) {
+            int idx = this.partiallyFreeBlocks.peekFirst();
+
             if (idx < 0 || idx >= blockCount) {
-                itPart.remove();
+                this.partiallyFreeBlocks.removeFirst();
+                metadataChanged = true;
                 continue;
             }
-            Block<T> block = this.readBlock(idx);
-            if (block.hasSpace() && !block.isEmpty()) {
-                return idx;
-            } else {
-                itPart.remove();
-            }
+
+            return idx;
         }
 
-        Iterator<Integer> itEmpty = this.emptyBlocks.iterator();
-        while (itEmpty.hasNext()) {
-            int idx = itEmpty.next();
+        while (!this.emptyBlocks.isEmpty()) {
+            int idx = this.emptyBlocks.peekFirst();
+
             if (idx < 0 || idx >= blockCount) {
-                itEmpty.remove();
+                this.emptyBlocks.removeFirst();
+                metadataChanged = true;
                 continue;
             }
-            Block<T> block = this.readBlock(idx);
-            if (block.isEmpty()) {
-                return idx;
-            } else {
-                itEmpty.remove();
-            }
+
+            return idx;
         }
 
         return blockCount;

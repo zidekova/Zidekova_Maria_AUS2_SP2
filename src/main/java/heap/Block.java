@@ -201,7 +201,7 @@ public class Block<T extends data.Record<T>> {
         }
     }
 
-    private boolean isEmptyRecord(T record) {
+    protected boolean isEmptyRecord(T record) {
         if (record == null) return true;
         try {
             byte[] recordBytes = record.getBytes();

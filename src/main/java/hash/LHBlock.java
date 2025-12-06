@@ -17,49 +17,49 @@ public class LHBlock<T extends Record<T>> extends Block<T> {
     }
 
     /**
-     * Points to the next overflow block in the chain.
+     * Points to the next overflow block in the chain
      */
     public int getNextOverflow() {
         return this.nextBlockPointer;
     }
 
     /**
-     * Sets the next overflow pointer.
+     * Sets the next overflow pointer
      */
     public void setNextOverflow(int next) {
         this.nextBlockPointer = next;
     }
 
     /**
-     * Gets the number of records stored in overflow chain.
+     * Gets the number of records stored in overflow chain
      */
     public int getOverflowRecordCount() {
         return this.overflowRecordCount;
     }
 
     /**
-     * Sets the number of records in overflow chain.
+     * Sets the number of records in overflow chain
      */
     public void setOverflowRecordCount(int count) {
         this.overflowRecordCount = count;
     }
 
     /**
-     * Gets the length of the overflow chain.
+     * Gets the length of the overflow chain
      */
     public int getChainLength() {
         return this.chainLength;
     }
 
     /**
-     * Sets the length of the overflow chain.
+     * Sets the length of the overflow chain
      */
     public void setChainLength(int length) {
         this.chainLength = length;
     }
 
     /**
-     * Checks if the block is empty.
+     * Checks if the block is empty
      */
     @Override
     public boolean isEmpty() {
@@ -67,80 +67,78 @@ public class LHBlock<T extends Record<T>> extends Block<T> {
     }
 
     /**
-     * Serializes the block to byte array.
+     * Serializes the block to byte array
      */
     @Override
     public byte[] getBytes() {
-        int recordSize = this.getRecordTemplate().getSize();
-        int recordsPerBlock = this.getRecordsPerBlock();
+        final int recordSize = this.getRecordTemplate().getSize();
+        final int recordsPerBlock = this.getRecordsPerBlock();
+        final int payloadBytes = recordSize * recordsPerBlock;
+        final ByteBuffer buffer = ByteBuffer.allocate(16 + payloadBytes);
 
-        ByteBuffer buffer = ByteBuffer.allocate(16 + recordSize * recordsPerBlock);
-
-        // validCount + nextBlockPointer + overflowRecordCount + chainLength
         buffer.putInt(this.validCount);
         buffer.putInt(this.nextBlockPointer);
         buffer.putInt(this.overflowRecordCount);
         buffer.putInt(this.chainLength);
 
-
-        // serialize records
-        List<T> records = this.getRecords();
         for (int i = 0; i < recordsPerBlock; i++) {
-            if (i < records.size() && records.get(i) != null) {
-                byte[] recordBytes = records.get(i).getBytes();
-                if (recordBytes.length != recordSize) {
-                    byte[] padded = new byte[recordSize];
-                    System.arraycopy(recordBytes, 0, padded, 0, Math.min(recordBytes.length, recordSize));
-                    buffer.put(padded);
-                } else {
-                    buffer.put(recordBytes);
+            T rec = (this.records != null && i < this.records.length) ? this.records[i] : null;
+            byte[] rb;
+            if (rec != null && !isEmptyRecord(rec)) {
+                rb = rec.getBytes();
+                if (rb.length != recordSize) {
+                    byte[] tmp = new byte[recordSize];
+                    System.arraycopy(rb, 0, tmp, 0, Math.min(rb.length, recordSize));
+                    rb = tmp;
                 }
             } else {
-                buffer.put(new byte[recordSize]);
+                rb = new byte[recordSize];
             }
+            buffer.put(rb);
         }
-
         return buffer.array();
     }
 
     /**
-     * Deserializes the block from byte array.
-     * Reconstructs header fields and record data based on block type.
+     * Deserializes the block from byte array
+     * Reconstructs header fields and record data based on block type
      */
-    @Override
+
     public void fromBytes(byte[] data) throws IOException {
-        if (data == null) {
-            throw new IOException("Null block data");
+        if (data == null) throw new IOException("Null block data");
+
+        final int recordSize = this.getRecordTemplate().getSize();
+        final int recordsPerBlock = this.getRecordsPerBlock();
+        final int expected = 16 + recordSize * recordsPerBlock;
+
+        if (data.length < expected) {
+            byte[] padded = new byte[expected];
+            System.arraycopy(data, 0, padded, 0, data.length);
+            data = padded;
         }
 
-        int recordSize = this.getRecordTemplate().getSize();
-        int recordsPerBlock = this.getRecordsPerBlock();
-        int expectedSize = 16 + recordSize * recordsPerBlock;
+        final ByteBuffer buffer = ByteBuffer.wrap(data);
 
-        if (data.length < expectedSize) {
-            byte[] paddedData = new byte[expectedSize];
-            System.arraycopy(data, 0, paddedData, 0, data.length);
-            data = paddedData;
-        }
+        int hdrValid     = buffer.getInt();
+        int hdrNext      = buffer.getInt();
+        int hdrOvCount   = buffer.getInt();
+        int hdrChainLen  = buffer.getInt();
 
-        ByteBuffer buffer = ByteBuffer.wrap(data);
         this.clearRecords();
-
-        this.validCount = buffer.getInt();
-        this.nextBlockPointer = buffer.getInt();
-        this.overflowRecordCount = buffer.getInt();
-        this.chainLength = buffer.getInt();
-
-        // read records
+        int actualValid = 0;
         for (int i = 0; i < recordsPerBlock; i++) {
-            byte[] recordData = new byte[recordSize];
-            buffer.get(recordData);
-
-            if (!this.isEmptySlot(recordData)) {
+            byte[] recData = new byte[recordSize];
+            buffer.get(recData);
+            if (!this.isEmptySlot(recData)) {
                 try {
-                    T record = this.getRecordTemplate().createClass();
-                    record.fromBytes(recordData);
-                    this.records[i] = record;
+                    T rec = this.getRecordTemplate().createClass();
+                    rec.fromBytes(recData);
+                    if (!isEmptyRecord(rec)) {
+                        this.records[i] = rec;
+                        actualValid++;
+                    } else {
+                        this.records[i] = null;
+                    }
                 } catch (Exception e) {
                     throw new IOException("Failed to deserialize record", e);
                 }
@@ -148,5 +146,30 @@ public class LHBlock<T extends Record<T>> extends Block<T> {
                 this.records[i] = null;
             }
         }
+
+        this.validCount = actualValid;
+        this.overflowRecordCount = Math.max(0, hdrOvCount);
+        this.chainLength = Math.max(0, hdrChainLen);
+
+        if (hdrNext == 0 && this.overflowRecordCount == 0 && this.chainLength == 0) {
+            this.nextBlockPointer = -1;
+        } else {
+            this.nextBlockPointer = hdrNext;
+        }
+    }
+
+    /**
+     * Updates a record that matches the pattern with new data
+     * Returns true if record was found and updated, false otherwise
+     */
+    public boolean updateRecord(T pattern, T updatedRecord) {
+        for (int i = 0; i < this.records.length; i++) {
+            T record = this.records[i];
+            if (record.equals(pattern)) {
+                this.records[i] = updatedRecord;
+                return true;
+            }
+        }
+        return false;
     }
 }

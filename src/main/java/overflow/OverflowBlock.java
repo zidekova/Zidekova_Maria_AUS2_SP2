@@ -15,86 +15,90 @@ public class OverflowBlock<T extends Record<T>> extends Block<T> {
     }
 
     /**
-     * Points to the next overflow block in the chain.
+     * Points to the next overflow block in the chain
      */
     public int getNextOverflow() {
         return this.nextOverflowPointer;
     }
 
     /**
-     * Sets the next overflow block pointer.
+     * Sets the next overflow block pointer
      */
     public void setNextOverflow(int next) {
         this.nextOverflowPointer = next;
     }
 
     /**
-     * Serializes the block to byte array.
+     * Serializes the block to byte array
      */
+
     @Override
     public byte[] getBytes() {
-        int recordSize = this.getRecordTemplate().getSize();
-        int recordsPerBlock = this.getRecordsPerBlock();
-
-        ByteBuffer buffer = ByteBuffer.allocate(8 + recordSize * recordsPerBlock);
+        final int recordSize = this.getRecordTemplate().getSize();
+        final int recordsPerBlock = this.getRecordsPerBlock();
+        final int payloadBytes = recordSize * recordsPerBlock;
+        final ByteBuffer buffer = ByteBuffer.allocate(8 + payloadBytes);
 
         buffer.putInt(this.validCount);
         buffer.putInt(this.nextOverflowPointer);
 
-        // serialize records
-        List<T> records = this.getRecords();
         for (int i = 0; i < recordsPerBlock; i++) {
-            if (i < records.size() && records.get(i) != null) {
-                byte[] recordBytes = records.get(i).getBytes();
-                if (recordBytes.length != recordSize) {
-                    byte[] padded = new byte[recordSize];
-                    System.arraycopy(recordBytes, 0, padded, 0, Math.min(recordBytes.length, recordSize));
-                    buffer.put(padded);
-                } else {
-                    buffer.put(recordBytes);
+            T rec = (this.records != null && i < this.records.length) ? this.records[i] : null;
+            byte[] rb;
+            if (rec != null && !isEmptyRecord(rec)) {
+                rb = rec.getBytes();
+                if (rb.length != recordSize) {
+                    byte[] tmp = new byte[recordSize];
+                    System.arraycopy(rb, 0, tmp, 0, Math.min(rb.length, recordSize));
+                    rb = tmp;
                 }
             } else {
-                buffer.put(new byte[recordSize]);
+                rb = new byte[recordSize];
             }
+            buffer.put(rb);
         }
-
         return buffer.array();
     }
 
     /**
-     * Deserializes the block from byte array.
+     * Deserializes the block from byte array
      */
+
     @Override
     public void fromBytes(byte[] data) throws IOException {
-        if (data == null) {
-            throw new IOException("Null block data");
+        if (data == null) throw new IOException("Null block data");
+
+        final int recordSize = this.getRecordTemplate().getSize();
+        final int recordsPerBlock = this.getRecordsPerBlock();
+        final int expected = 8 + recordSize * recordsPerBlock;
+
+        if (data.length < expected) {
+            byte[] padded = new byte[expected];
+            System.arraycopy(data, 0, padded, 0, data.length);
+            data = padded;
         }
 
-        int recordSize = this.getRecordTemplate().getSize();
-        int recordsPerBlock = this.getRecordsPerBlock();
-        int expectedSize = 8 + recordSize * recordsPerBlock;
+        final ByteBuffer buffer = ByteBuffer.wrap(data);
 
-        if (data.length < expectedSize) {
-            byte[] paddedData = new byte[expectedSize];
-            System.arraycopy(data, 0, paddedData, 0, data.length);
-            data = paddedData;
-        }
+        int hdrValid = buffer.getInt();
+        int hdrNext = buffer.getInt();
 
-        ByteBuffer buffer = ByteBuffer.wrap(data);
         this.clearRecords();
-
-        this.validCount = buffer.getInt();
-        this.nextOverflowPointer = buffer.getInt();
+        int actualValid = 0;
 
         for (int i = 0; i < recordsPerBlock; i++) {
-            byte[] recordData = new byte[recordSize];
-            buffer.get(recordData);
-
-            if (!this.isEmptySlot(recordData)) {
+            byte[] recData = new byte[recordSize];
+            buffer.get(recData);
+            if (!this.isEmptySlot(recData)) {
                 try {
-                    T record = this.getRecordTemplate().createClass();
-                    record.fromBytes(recordData);
-                    this.records[i] = record;
+                    T rec = this.getRecordTemplate().createClass();
+                    rec.fromBytes(recData);
+                    if (!isEmptyRecord(rec)) {
+                        this.records[i] = rec;
+                        actualValid++;
+                    } else {
+                        this.records[i] = null;
+                    }
                 } catch (Exception e) {
                     throw new IOException("Failed to deserialize record", e);
                 }
@@ -102,5 +106,23 @@ public class OverflowBlock<T extends Record<T>> extends Block<T> {
                 this.records[i] = null;
             }
         }
+
+        this.validCount = actualValid;
+        this.nextOverflowPointer = (hdrNext == 0 && this.validCount == 0) ? -1 : hdrNext;
+    }
+
+    /**
+     * Updates a record with matching key
+     * Returns true if record was found and updated, false otherwise
+     */
+    public boolean updateRecord(String key, T updatedRecord) {
+        for (int i = 0; i < this.records.length; i++) {
+            T record = this.records[i];
+            if (record.getKey().equals(key)) {
+                this.records[i] = updatedRecord;
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -2,6 +2,8 @@ package testers;
 
 import data.Person;
 import hash.LinearHashing;
+import hash.LHBlock;
+import overflow.OverflowBlock;
 import overflow.OverflowFile;
 
 import java.io.IOException;
@@ -10,8 +12,8 @@ import java.util.*;
 import java.util.function.Consumer;
 
 public class HashFileTester {
-    private static final String[] NAMES = {"Anna","Peter","Maria","Jozef","Eva","Michal","Katarina"};
-    private static final String[] SURNAMES = {"Novak","Horak","Kral","Bielik","Farkas","Kovac","Urban"};
+    private static final String[] NAMES = {"Anna", "Peter", "Maria", "Jozef", "Eva", "Michal", "Katarina"};
+    private static final String[] SURNAMES = {"Novak", "Horak", "Kral", "Bielik", "Farkas", "Kovac", "Urban"};
     private static final Random random = new Random();
     private int patientCounter = 1;
 
@@ -204,7 +206,7 @@ public class HashFileTester {
 
         LinearHashing.LinearHashingStats stats = hashFile.getStats();
         for (int i = 0; i < stats.totalBlocks; i++) {
-            hash.LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
+            LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
 
             for (Person record : primaryBlock.getRecords()) {
                 if (record != null && !record.getKey().trim().isEmpty()) {
@@ -215,7 +217,7 @@ public class HashFileTester {
             int overflowPointer = primaryBlock.getNextOverflow();
             while (overflowPointer != -1) {
                 OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
-                overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
+                OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
 
                 for (Person record : overflowBlock.getRecords()) {
                     if (record != null && !record.getKey().trim().isEmpty()) {
@@ -262,7 +264,7 @@ public class HashFileTester {
 
         LinearHashing.LinearHashingStats stats = hashFile.getStats();
         for (int i = 0; i < stats.totalBlocks; i++) {
-            hash.LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
+            LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
 
             for (Person record : primaryBlock.getRecords()) {
                 if (record != null && !record.getKey().trim().isEmpty()) {
@@ -273,7 +275,7 @@ public class HashFileTester {
             int overflowPointer = primaryBlock.getNextOverflow();
             while (overflowPointer != -1) {
                 OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
-                overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
+                OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
 
                 for (Person record : overflowBlock.getRecords()) {
                     if (record != null && !record.getKey().trim().isEmpty()) {
@@ -344,7 +346,7 @@ public class HashFileTester {
      * Checks if a record is in the correct block
      */
     private boolean isRecordInCorrectBlock(int expectedBlockIndex, String key) throws IOException {
-        hash.LHBlock<Person> block = hashFile.readPrimaryBlock(expectedBlockIndex);
+        LHBlock<Person> block = hashFile.readPrimaryBlock(expectedBlockIndex);
         if (containsRecord(block, key)) {
             return true;
         }
@@ -352,7 +354,7 @@ public class HashFileTester {
         int overflowPointer = block.getNextOverflow();
         while (overflowPointer != -1) {
             OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
-            overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
+            OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowPointer);
             if (containsRecord(overflowBlock, key)) {
                 return true;
             }
@@ -381,7 +383,7 @@ public class HashFileTester {
         LinearHashing.LinearHashingStats stats = hashFile.getStats();
 
         for (int i = 0; i < stats.totalBlocks; i++) {
-            hash.LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
+            LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
             int overflowPointer = primaryBlock.getNextOverflow();
 
             Set<Integer> visitedBlocks = new HashSet<>();
@@ -396,7 +398,7 @@ public class HashFileTester {
                 visitedBlocks.add(currentPointer);
 
                 OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
-                overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(currentPointer);
+                OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(currentPointer);
 
                 for (Person record : overflowBlock.getRecords()) {
                     if (record != null && !record.getKey().trim().isEmpty()) {
@@ -531,6 +533,7 @@ public class HashFileTester {
 
         this.hashFile = null;
         this.insertedPersons.clear();
+        this.patientCounter = 1;
 
         return "HASH DATABÁZA VYČISTENÁ\n\nVšetky dáta boli úspešne odstránené.\n";
     }
@@ -582,110 +585,7 @@ public class HashFileTester {
     /**
      * Displays all blocks (primary and overflow) with their contents
      */
-    public String displayAllBlocks() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("CELÝ HASH SÚBOR - PRIMÁRNE A OVERFLOW BLOKY\n\n");
-
-        try {
-            LinearHashing.LinearHashingStats stats = hashFile.getStats();
-            sb.append("ŠTATISTIKY:\n");
-            sb.append("• Úroveň (level): ").append(stats.level).append("\n");
-            sb.append("• Split pointer: ").append(stats.splitPointer).append("\n");
-            sb.append("• Celkový počet záznamov: ").append(stats.totalRecords).append("\n");
-            sb.append("• Primárne bloky: ").append(stats.totalBlocks).append("\n");
-            sb.append("• Overflow bloky: ").append(stats.overflowBlocks).append("\n");
-            sb.append("• Záznamy v overflow: ").append(stats.totalOverflowRecords).append("\n");
-            sb.append("• Hustota: ").append(String.format("%.2f", stats.loadFactor)).append("\n\n");
-
-            for (int i = 0; i < stats.totalBlocks; i++) {
-                sb.append("════════════════════════════════════════════════════════════════════════════════\n");
-                sb.append("PRIMÁRNY BLOK ").append(i).append("\n");
-                sb.append("════════════════════════════════════════════════════════════════════════════════\n");
-
-                try {
-                    hash.LHBlock<Person> primaryBlock = hashFile.readPrimaryBlock(i);
-
-                    sb.append("Adresa: ").append(primaryBlock.getAddress()).append(" bytes\n");
-                    sb.append("Stav: ");
-                    if (primaryBlock.isEmpty()) sb.append("PRÁZDNY");
-                    else if (!primaryBlock.hasSpace()) sb.append("PLNÝ");
-                    else sb.append("ČIASTOČNE VOĽNÝ");
-                    sb.append(" | Záznamy: ").append(primaryBlock.getValidCount())
-                            .append("/").append(primaryBlock.getRecordsPerBlock()).append("\n");
-                    sb.append("Overflow pointer: ").append(primaryBlock.getNextOverflow())
-                            .append(" | Overflow záznamov: ").append(primaryBlock.getOverflowRecordCount())
-                            .append(" | Dĺžka reťazca: ").append(primaryBlock.getChainLength()).append("\n\n");
-
-                    if (primaryBlock.isEmpty()) {
-                        sb.append("   Žiadne záznamy\n");
-                    } else {
-                        int recordNum = 1;
-                        for (Person record : primaryBlock.getRecords()) {
-                            if (record != null && !record.getId().trim().isEmpty()) {
-                                sb.append("   ").append(recordNum).append(". ").append(record).append("\n");
-                                recordNum++;
-                            }
-                        }
-                    }
-
-                    int overflowPointer = primaryBlock.getNextOverflow();
-                    if (overflowPointer != -1) {
-                        sb.append("\n   ┌─ OVERFLOW REŤAZEC ──────────────────────────────────────────────\n");
-                        displayOverflowChain(sb, overflowPointer, 1);
-                        sb.append("   └──────────────────────────────────────────────────────────────────\n");
-                    }
-
-                    sb.append("\n");
-
-                } catch (Exception e) {
-                    sb.append("CHYBA pri čítaní bloku ").append(i).append(": ").append(e.getMessage()).append("\n\n");
-                }
-            }
-        } catch (Exception e) {
-            sb.append("CHYBA pri získavaní štatistík: ").append(e.getMessage()).append("\n");
-        }
-
-        return sb.toString();
-    }
-
-    /**
-     * Recursive method to display overflow chain
-     */
-    private void displayOverflowChain(StringBuilder sb, int overflowBlockIndex, int level) throws IOException {
-        if (overflowBlockIndex == -1) return;
-
-        try {
-            OverflowFile<Person> overflowFile = hashFile.getOverflowFile();
-            overflow.OverflowBlock<Person> overflowBlock = overflowFile.readOverflowBlock(overflowBlockIndex);
-
-            String indent = "   " + "  ".repeat(level);
-            sb.append(indent).append("├─ OVERFLOW BLOK ").append(overflowBlockIndex).append("\n");
-            sb.append(indent).append("│  Adresa: ").append(overflowBlock.getAddress()).append(" bytes\n");
-            sb.append(indent).append("│  Záznamy: ").append(overflowBlock.getValidCount())
-                    .append("/").append(overflowBlock.getRecordsPerBlock()).append("\n");
-            sb.append(indent).append("│  Ďalší overflow: ").append(overflowBlock.getNextOverflow()).append("\n");
-
-            if (overflowBlock.isEmpty()) {
-                sb.append(indent).append("│  Žiadne záznamy\n");
-            } else {
-                int recordNum = 1;
-                for (Person record : overflowBlock.getRecords()) {
-                    if (record != null && !record.getId().trim().isEmpty()) {
-                        sb.append(indent).append("│  ").append(recordNum).append(". ").append(record).append("\n");
-                        recordNum++;
-                    }
-                }
-            }
-
-            int nextOverflow = overflowBlock.getNextOverflow();
-            if (nextOverflow != -1) {
-                sb.append(indent).append("│\n");
-                displayOverflowChain(sb, nextOverflow, level + 1);
-            }
-
-        } catch (Exception e) {
-            sb.append("CHYBA pri čítaní overflow bloku ").append(overflowBlockIndex)
-                    .append(": ").append(e.getMessage()).append("\n");
-        }
+    public String displayAllBlocks() throws IOException {
+        return this.hashFile.displayAllBlocks("PACIENTI");
     }
 }

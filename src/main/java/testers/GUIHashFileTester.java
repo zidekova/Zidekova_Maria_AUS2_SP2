@@ -28,7 +28,7 @@ public class GUIHashFileTester {
      * Initializes hash file and operation generator instances
      */
     private static void initializeApplication() throws IOException {
-        hashFile = new LinearHashing<>("pacienti_hash.dat", 256, 128, new Person(), 2);
+        hashFile = new LinearHashing<>("pacienti_hash.dat", 300, 200, new Person(), 2);
         hashFileTester = new HashFileTester(hashFile);
     }
 
