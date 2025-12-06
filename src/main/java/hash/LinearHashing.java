@@ -528,7 +528,7 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
                     // take first free from pool, otherwise allocate
                     overflow.OverflowBlock<T> nb;
                     if (used == pool.size()) {
-                        int newIdx = this.overflowFile.getBlockCount();
+                        int newIdx = this.overflowFile.allocateOverflowBlock();
                         nb = this.overflowFile.createBlock(newIdx);
                         nb.clearRecords();
                         nb.setNextOverflow(-1);
@@ -542,7 +542,7 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
                 if (pos == -1) {
                     overflow.OverflowBlock<T> nb;
                     if (used >= pool.size()) {
-                        int newIdx = this.overflowFile.getBlockCount();
+                        int newIdx = this.overflowFile.allocateOverflowBlock();
                         nb = this.overflowFile.createBlock(newIdx);
                         nb.clearRecords();
                         nb.setNextOverflow(-1);
@@ -616,7 +616,6 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
      * Performed only if at least 1 overflow block can be freed
      */
     private boolean compactBlock(int blockIndex) throws IOException {
-        // read primary block and overflow chain
         LHBlock<T> primary = this.readPrimaryBlock(blockIndex);
         int firstOverflow = primary.getNextOverflow();
         if (firstOverflow == -1) {
@@ -627,90 +626,90 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
         int L = chain.size();
         if (L == 0) return false;
 
-        // collect all records (primary + overflow)
-        List<T> all = new ArrayList<>(primary.getRecords());
+        List<T> allRecords = new ArrayList<>(primary.getRecords());
         for (OverflowBlock<T> ob : chain) {
-            all.addAll(ob.getRecords());
+            allRecords.addAll(ob.getRecords());
         }
 
-        // capaticies
-        int primaryCap = this.getRecordsPerBlock();
-        int overflowCap = this.overflowFile.getRecordsPerBlock();
-        int totalRecs = all.size();
+        int primaryCapacity = this.getRecordsPerBlock();
+        int overflowCapacity = this.overflowFile.getRecordsPerBlock();
 
-        // try to free at least 1 overflow block, fit into L-1 blocks
-        int capacityWithLminus1 = primaryCap + (L - 1) * overflowCap;
-        if (totalRecs > capacityWithLminus1) {
-            // cannot free even one block, do nothing
+        int capacityWithOneLess = primaryCapacity + (L - 1) * overflowCapacity;
+        if (allRecords.size() > capacityWithOneLess) {
             return false;
         }
 
         primary.clearRecords();
         primary.setNextOverflow(-1);
         primary.setOverflowRecordCount(0);
+        primary.setChainLength(0);
 
-        for (overflow.OverflowBlock<T> ob : chain) {
+        for (OverflowBlock<T> ob : chain) {
             ob.clearRecords();
             ob.setNextOverflow(-1);
         }
 
-        // primary first, then overflow via pool, use at most L-1 blocks
-        OverflowBlock<T> tail = null;
-        int used = 0;
-
-        for (T rec : all) {
-            int pos = primary.addRecord(rec);
-            if (pos == -1) {
-                if (tail == null) {
-                    tail = chain.get(used++);
-                    primary.setNextOverflow(tail.getAddress());
-                }
-                pos = tail.addRecord(rec);
-                if (pos == -1) {
-                    if (used >= chain.size()) {
-                        throw new IllegalStateException("Insufficient overflow blocks in compactBlock().");
-                    }
-                    overflow.OverflowBlock<T> nb = chain.get(used++);
-                    tail.setNextOverflow(nb.getAddress());
-                    tail = nb;
-                    pos = tail.addRecord(rec);
-                    if (pos == -1) {
-                        throw new IllegalStateException("Overflow block did not accept record in compactBlock().");
-                    }
-                }
-                primary.setOverflowRecordCount(primary.getOverflowRecordCount() + 1);
+        List<T> remaining = new ArrayList<>();
+        for (T rec : allRecords) {
+            if (primary.addRecord(rec) == -1) {
+                remaining.add(rec);
             }
         }
 
-        // chain length, number of actually used overflow blocks
+        int overflowCount = 0;
         int chainLength = 0;
-        int cur = primary.getNextOverflow();
-        while (cur != -1) {
+        OverflowBlock<T> currentOverflow = null;
+        OverflowBlock<T> previousOverflow = null;
+
+        for (int i = 0; i < chain.size() && !remaining.isEmpty(); i++) {
+            currentOverflow = chain.get(i);
             chainLength++;
-            int next = -1;
-            for (OverflowBlock<T> p : chain) {
-                if (p.getAddress() == cur) {
-                    next = p.getNextOverflow();
-                    break;
+
+            List<T> toAdd = new ArrayList<>(remaining);
+            remaining.clear();
+
+            for (T rec : toAdd) {
+                if (currentOverflow.addRecord(rec) == -1) {
+                    remaining.add(rec);
                 }
             }
-            cur = next;
+
+            if (previousOverflow != null) {
+                previousOverflow.setNextOverflow(currentOverflow.getAddress());
+            } else {
+                primary.setNextOverflow(currentOverflow.getAddress());
+            }
+
+            overflowCount += currentOverflow.getValidCount();
+            previousOverflow = currentOverflow;
+
+            if (remaining.isEmpty()) {
+                currentOverflow.setNextOverflow(-1);
+                break;
+            }
         }
+
+        if (!remaining.isEmpty()) {
+            throw new IllegalStateException("Cannot fit records after compaction");
+        }
+
+        primary.setOverflowRecordCount(overflowCount);
         primary.setChainLength(chainLength);
 
-        // write primary + only used overflow blocks, mark unused as empty
         this.writeBlock(blockIndex, primary);
-        for (int i = 0; i < used; i++) {
+
+        for (int i = 0; i < chainLength; i++) {
             this.overflowFile.writeOverflowBlock(chain.get(i));
         }
-        for (int i = used; i < chain.size(); i++) {
+
+        for (int i = chainLength; i < chain.size(); i++) {
             this.overflowFile.markOverflowBlockAsEmpty(chain.get(i).getAddress());
         }
 
         this.overflowFile.removeEmptyBlocksFromEnd();
         this.metadataChanged = true;
 
-        return used < L;
+        return chainLength < L;
     }
 
     private T createPattern(String key) {

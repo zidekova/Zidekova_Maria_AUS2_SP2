@@ -51,17 +51,28 @@ public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
     }
 
     /**
+     * Allocates a new overflow block in memory at the end of the file
+     */
+    public int allocateOverflowBlock() throws IOException {
+        int newIndex = this.getBlockCount();
+        OverflowBlock<T> newBlock = this.createBlock(newIndex);
+        newBlock.clearRecords();
+        newBlock.setNextOverflow(-1);
+        this.usedOverflowBlocks++;
+        return newIndex;
+    }
+
+    /**
      * Adds a record to overflow chain
      */
     public int[] addToChain(int firstOverflowIndex, T record) throws IOException {
         // if the chain is empty
         if (firstOverflowIndex == -1) {
-            int newBlockIndex = this.getBlockCount();
+            int newBlockIndex = this.allocateOverflowBlock();
             OverflowBlock<T> newBlock = this.createBlock(newBlockIndex);
 
             if (newBlock.addRecord(record) != -1) {
                 this.writeOverflowBlock(newBlock);
-                this.usedOverflowBlocks++;
                 return new int[]{newBlockIndex, 1};
             }
             return null;
@@ -79,7 +90,7 @@ public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
         }
 
         // all blocks are full - add a new empty block at the end of the file
-        int newBlockIndex = this.getBlockCount();
+        int newBlockIndex = this.allocateOverflowBlock();
         OverflowBlock<T> newBlock = this.createBlock(newBlockIndex);
 
         if (newBlock.addRecord(record) != -1) {
@@ -88,10 +99,11 @@ public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
             // write both changed blocks to file
             this.writeOverflowBlock(chain.getLast());
             this.writeOverflowBlock(newBlock);
-            this.usedOverflowBlocks++;
+
             return new int[]{firstOverflowIndex, originalLength + 1};
         }
 
+        this.markOverflowBlockAsEmpty(newBlockIndex);
         return null;
     }
 
