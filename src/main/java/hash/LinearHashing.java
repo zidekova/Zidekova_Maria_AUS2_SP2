@@ -488,128 +488,86 @@ public class LinearHashing<T extends Record<T>> extends HeapFile<T> {
             return;
         }
 
-        // read primary blocks and overflow chains
-        LHBlock<T> blockA = this.readPrimaryBlock(a);
+        List<T> allRecords = new ArrayList<>();
+
         LHBlock<T> blockB = this.readPrimaryBlock(b);
+        allRecords.addAll(blockB.getRecords());
 
-        List<OverflowBlock<T>> chainA = this.overflowFile.collectAllBlocksFromChain(blockA.getNextOverflow());
-        List<OverflowBlock<T>> chainB = this.overflowFile.collectAllBlocksFromChain(blockB.getNextOverflow());
-
-        List<T> combined = new ArrayList<>(blockB.getRecords());
-        for (OverflowBlock<T> ob : chainB) {
-            combined.addAll(ob.getRecords());
-        }
-        combined.addAll(blockA.getRecords());
-        for (OverflowBlock<T> ob : chainA) {
-            combined.addAll(ob.getRecords());
+        int bOverflow = blockB.getNextOverflow();
+        while (bOverflow != -1) {
+            OverflowBlock<T> overflowBlock = this.overflowFile.readOverflowBlock(bOverflow);
+            allRecords.addAll(overflowBlock.getRecords());
+            bOverflow = overflowBlock.getNextOverflow();
         }
 
-        // reset target block b and prepare overflow block pool (b + a)
+        LHBlock<T> blockA = this.readPrimaryBlock(a);
+        allRecords.addAll(blockA.getRecords());
+
+        int aOverflow = blockA.getNextOverflow();
+        while (aOverflow != -1) {
+            OverflowBlock<T> overflowBlock = this.overflowFile.readOverflowBlock(aOverflow);
+            allRecords.addAll(overflowBlock.getRecords());
+            aOverflow = overflowBlock.getNextOverflow();
+        }
+
+        allRecords.removeIf(record -> record == null || record.getKey() == null || record.getKey().isEmpty());
+
         blockB.clearRecords();
         blockB.setNextOverflow(-1);
         blockB.setOverflowRecordCount(0);
+        blockB.setChainLength(0);
 
-        List<OverflowBlock<T>> pool = new ArrayList<>(chainB.size() + chainA.size());
-        pool.addAll(chainB);
-        pool.addAll(chainA);
-        for (OverflowBlock<T> ob : pool) {
-            ob.clearRecords();
-            ob.setNextOverflow(-1);
-        }
+        blockA.clearRecords();
+        blockA.setNextOverflow(-1);
+        blockA.setOverflowRecordCount(0);
+        blockA.setChainLength(0);
 
-        // fill b: primary first, then overflow via pool
-        OverflowBlock<T> tail = null;
-        int used = 0;
+        this.writeBlock(a, blockA);
 
-        for (T rec : combined) {
-            int pos = blockB.addRecord(rec);
-            if (pos == -1) {
-                if (tail == null) {
-                    // take first free from pool, otherwise allocate
-                    overflow.OverflowBlock<T> nb;
-                    if (used == pool.size()) {
-                        int newIdx = this.overflowFile.allocateOverflowBlock();
-                        nb = this.overflowFile.createBlock(newIdx);
-                        nb.clearRecords();
-                        nb.setNextOverflow(-1);
-                        pool.add(nb);
-                    }
-                    tail = pool.get(used++);
-                    blockB.setNextOverflow(tail.getAddress());
-                }
-                // try to add to tail
-                pos = tail.addRecord(rec);
-                if (pos == -1) {
-                    overflow.OverflowBlock<T> nb;
-                    if (used >= pool.size()) {
-                        int newIdx = this.overflowFile.allocateOverflowBlock();
-                        nb = this.overflowFile.createBlock(newIdx);
-                        nb.clearRecords();
-                        nb.setNextOverflow(-1);
-                        pool.add(nb);
-                    } else {
-                        nb = pool.get(used++);
-                    }
-                    tail.setNextOverflow(nb.getAddress());
-                    tail = nb;
+        this.overflowFile.markOverflowBlockAsEmpty(blockA.getNextOverflow());
+        this.overflowFile.markOverflowBlockAsEmpty(blockB.getNextOverflow());
 
-                    pos = tail.addRecord(rec);
-                    if (pos == -1) {
-                        throw new IllegalStateException("Overflow block didn't accept record.");
-                    }
-                }
-                blockB.setOverflowRecordCount(blockB.getOverflowRecordCount() + 1);
+        blockA.setNextOverflow(-1);
+        blockB.setNextOverflow(-1);
+
+        for (T record : allRecords) {
+            if (record != null && record.getKey() != null) {
+                this.insertRecordIntoBlock(blockB, record);
             }
         }
 
-        // calculate chain length
-        int chainLength = 0;
-        int cur = blockB.getNextOverflow();
-        while (cur != -1) {
-            chainLength++;
-            // find next block by address in pool
-            int next = -1;
-            for (overflow.OverflowBlock<T> p : pool) {
-                if (p.getAddress() == cur) {
-                    next = p.getNextOverflow();
-                    break;
-                }
-            }
-            cur = next;
-        }
-        blockB.setChainLength(chainLength);
-
-        // write primary b + only used overflow blocks and mark unused as empty
         this.writeBlock(b, blockB);
-        for (int i = 0; i < used; i++) {
-            this.overflowFile.writeOverflowBlock(pool.get(i));
-        }
-        for (int i = used; i < pool.size(); i++) {
-            this.overflowFile.markOverflowBlockAsEmpty(pool.get(i).getAddress());
-        }
 
-        // remove last group a, mark as empty and remove trailing empty block
-        LHBlock<T> emptyA = (LHBlock<T>) this.createBlock(a);
-        emptyA.clearRecords();
-        emptyA.setNextOverflow(-1);
-        emptyA.setOverflowRecordCount(0);
-        emptyA.setChainLength(0);
-
-        this.updateBlockLists(a, emptyA);
-
-        this.removeEmptyBlocksFromEnd();
-        this.overflowFile.removeEmptyBlocksFromEnd();
-
-        // update structure
         if (this.splitPointer > 0) {
-            this.splitPointer = b;
+            this.splitPointer--;
         } else {
-            this.splitPointer = b;
-            this.level = this.level - 1;
+            this.level--;
+            this.splitPointer = this.M * (int) Math.pow(2, this.level) - 1;
         }
+
         this.metadataChanged = true;
+        this.overflowFile.removeEmptyBlocksFromEnd();
     }
 
+    private boolean insertRecordIntoBlock(LHBlock<T> block, T record) throws IOException {
+        if (block.addRecord(record) != -1) {
+            return true;
+        }
+
+        int firstOverflow = block.getNextOverflow();
+        int[] result = this.overflowFile.addToChain(firstOverflow, record);
+
+        if (result != null) {
+            if (firstOverflow == -1) {
+                block.setNextOverflow(result[0]);
+            }
+            block.setOverflowRecordCount(block.getOverflowRecordCount() + 1);
+            block.setChainLength(result[1]);
+            return true;
+        }
+
+        return false;
+    }
 
     /**
      * Compaction of a single block

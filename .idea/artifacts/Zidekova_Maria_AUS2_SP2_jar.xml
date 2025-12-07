@@ -1,0 +1,11 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="Zidekova_Maria_AUS2_SP2:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/Zidekova_Maria_AUS2_SP2_jar</output-path>
+    <root id="archive" name="Zidekova_Maria_AUS2_SP2.jar">
+      <element id="directory" name="META-INF">
+        <element id="file-copy" path="$PROJECT_DIR$/META-INF/MANIFEST.MF" />
+      </element>
+      <element id="module-output" name="Zidekova_Maria_AUS2_SP2" />
+    </root>
+  </artifact>
+</component>

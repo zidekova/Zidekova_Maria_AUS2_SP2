@@ -143,7 +143,7 @@ public class Database {
         this.tests.insert(test, String.valueOf(test.getTestCode()));
 
         patient.addTestCode(test.getTestCode());
-        this.updatePerson(patient);
+        this.persons.update(patient);
 
         lastError = null;
         return test;
@@ -152,28 +152,26 @@ public class Database {
     /**
      * 2) Find person with all tests
      */
-    public Person findPersonWithTests(String patientId) throws IOException {
-        Person person = this.persons.get(patientId);
+    public List<PCRTest> getTestsForPatient(Person person) throws IOException {
         if (person == null) {
-            return null;
+            return new ArrayList<>();
         }
 
-        List<PCRTest> patientTests = new ArrayList<>();
+        List<PCRTest> result = new ArrayList<>();
         for (int testCode : person.getTestCodes()) {
             PCRTest test = this.tests.get(String.valueOf(testCode));
             if (test != null) {
-                patientTests.add(test);
+                result.add(test);
             }
         }
-
-        return person;
+        return result;
     }
 
     /**
      * 3) Find PCR test by code with patient data
      */
-    public PCRTest findTestWithPatient(int testCode) throws IOException {
-        return this.tests.get(String.valueOf(testCode));
+    public PCRTest findPCRTest(int testId) throws IOException {
+        return this.tests.get(String.valueOf(testId));
     }
 
     /**
@@ -235,16 +233,7 @@ public class Database {
             return null;
         }
 
-        for (int testCode : existing.getTestCodes()) {
-            if (!updatedPerson.getTestCodes().contains(testCode)) {
-                updatedPerson.addTestCode(testCode);
-            }
-        }
-
-        if (!this.persons.update(updatedPerson))
-        {
-            return null;
-        }
+        if (!this.persons.update(updatedPerson)) return null;
 
         return updatedPerson;
     }
@@ -294,29 +283,6 @@ public class Database {
 
     public Person findPerson(String patientId) throws IOException {
         return this.persons.get(patientId);
-    }
-
-    public PCRTest findPCRTest(int testId) throws IOException {
-        return this.tests.get(String.valueOf(testId));
-    }
-
-    /**
-     * Get all tests for a patient
-     */
-    public List<PCRTest> getTestsForPatient(String patientId) throws IOException {
-        Person person = this.persons.get(patientId);
-        if (person == null) {
-            return new ArrayList<>();
-        }
-
-        List<PCRTest> result = new ArrayList<>();
-        for (int testCode : person.getTestCodes()) {
-            PCRTest test = this.tests.get(String.valueOf(testCode));
-            if (test != null) {
-                result.add(test);
-            }
-        }
-        return result;
     }
 
     public String nextPatientId() {

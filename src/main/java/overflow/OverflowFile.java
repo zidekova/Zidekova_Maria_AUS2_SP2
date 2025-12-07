@@ -9,12 +9,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
-    private final T template;
     private int usedOverflowBlocks;
 
     public OverflowFile(String filename, int blockSize, T template) throws IOException {
         super(filename, blockSize, template);
-        this.template = template;
         this.usedOverflowBlocks = 0;
     }
 
@@ -123,16 +121,15 @@ public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
 
         // try to delete a record from every block in chain
         boolean anyDeleted = false;
-        List<OverflowBlock<T>> kept = new ArrayList<>();
+        int deletedIndex = -1;
 
-        for (OverflowBlock<T> b : chain) {
+        for (int i = 0; i < chain.size(); i++) {
+            OverflowBlock<T> b = chain.get(i);
             boolean deleted = b.deleteRecord(this.createPattern(key));
             if (deleted) {
                 anyDeleted = true;
-            }
-
-            if (!b.isEmpty()) {
-                kept.add(b);
+                deletedIndex = i;
+                break;
             }
         }
 
@@ -141,29 +138,29 @@ public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
             return new int[]{0, chain.size()};
         }
 
-        // update nextOverflow for all kept blocks
-        int newFirst = -1;
-        for (int i = 0; i < kept.size(); i++) {
-            OverflowBlock<T> b = kept.get(i);
-            int nextAddr = (i + 1 < kept.size()) ? kept.get(i + 1).getAddress() : -1;
-            b.setNextOverflow(nextAddr);
-            this.writeOverflowBlock(b);
-            if (i == 0) newFirst = b.getAddress();
-        }
+        // record was deleted from block at deletedIndex
+        OverflowBlock<T> deletedBlock = chain.get(deletedIndex);
 
-        // all blocks, that are not kept, mark as empty
-        for (OverflowBlock<T> b : chain) {
-            if (!kept.contains(b)) {
-                this.markOverflowBlockAsEmpty(b.getAddress());
+        if (deletedBlock.isEmpty()) {
+            int nextAddr = deletedBlock.getNextOverflow();
+
+            if (deletedIndex == 0) {
+                firstOverflowIndexHolder[0] = nextAddr;
+                this.markOverflowBlockAsEmpty(deletedBlock.getAddress());
+            } else {
+                OverflowBlock<T> prevBlock = chain.get(deletedIndex - 1);
+                prevBlock.setNextOverflow(nextAddr);
+                this.writeOverflowBlock(prevBlock);
+                this.markOverflowBlockAsEmpty(deletedBlock.getAddress());
             }
+
+            int newLength = chain.size() - 1;
+            return new int[]{1, newLength};
+
+        } else {
+            this.writeOverflowBlock(deletedBlock);
+            return new int[]{1, chain.size()};
         }
-
-        firstOverflowIndexHolder[0] = newFirst;
-
-        this.removeEmptyBlocksFromEnd();
-
-        int newLen = (newFirst == -1) ? 0 : kept.size();
-        return new int[]{1, newLen};
     }
 
     /**
@@ -269,7 +266,7 @@ public class OverflowFile<T extends Record<T>> extends HeapFile<T> {
      */
     private T createPattern(String key) {
         try {
-            T pattern = this.template.createClass();
+            T pattern = this.getRecordTemplate().createClass();
             pattern.setKey(key);
             return pattern;
         } catch (Exception e) {

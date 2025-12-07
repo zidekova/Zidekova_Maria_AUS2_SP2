@@ -24,12 +24,11 @@ public class App {
     }
 
     /**
-     * OPERATION 1: Insert PCR test
+     * 1) Insert PCR test
      */
     public void insertPCRTest(String dateTimeStr, String patientId,
                               String resultStr, String valueStr, String note) {
         try {
-            // Parse inputs
             LocalDateTime dateTime = LocalDateTime.parse(dateTimeStr,
                     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
@@ -68,13 +67,13 @@ public class App {
     }
 
     /**
-     * OPERATION 2: Find person with tests
+     * 2) Find person with tests
      */
     public void findPersonWithTests(String patientId) {
         try {
-            Person person = database.findPersonWithTests(patientId);
+            Person person = database.findPerson(patientId);
             if (person != null) {
-                List<PCRTest> tests = database.getTestsForPatient(patientId);
+                List<PCRTest> tests = database.getTestsForPatient(person);
 
                 StringBuilder result = new StringBuilder();
                 result.append("DETAILY O PACIENTOVI\n\n");
@@ -105,12 +104,12 @@ public class App {
     }
 
     /**
-     * OPERATION 3: Find test with patient
+     * 3) Find test with patient
      */
     public void findTestWithPatient(String testCodeStr) {
         try {
             int testCode = Integer.parseInt(testCodeStr);
-            PCRTest test = database.findTestWithPatient(testCode);
+            PCRTest test = database.findPCRTest(testCode);
 
             if (test != null) {
                 Person patient = database.findPerson(test.getPatientId());
@@ -142,7 +141,7 @@ public class App {
     }
 
     /**
-     * OPERATION 4: Insert person
+     * 4) Insert person
      */
     public void insertPerson(String name, String surname, String birthDateStr) {
         try {
@@ -170,11 +169,12 @@ public class App {
     }
 
 
-    // OPERATION 5: Delete PCR test
+    /**
+     * 5) Delete PCR test
+     */
     public void deletePCRTest(String testCodeStr) {
         try {
             int testCode = Integer.parseInt(testCodeStr);
-            // Potvrdzovací dialóg
             int confirm = JOptionPane.showConfirmDialog(null,
                     "Naozaj chceš vymazať PCR test s kódom " + testCode + "?",
                     "Potvrdenie mazania",
@@ -193,10 +193,11 @@ public class App {
         }
     }
 
-    // OPERATION 6: Delete person with tests
+    /**
+     * 6) Delete person with tests
+     */
     public void deletePersonWithTests(String patientId) {
         try {
-            // Potvrdzovací dialóg
             int confirm = JOptionPane.showConfirmDialog(null,
                     "Naozaj chceš vymazať pacienta " + patientId + " vrátane všetkých jeho testov?",
                     "Potvrdenie mazania",
@@ -216,7 +217,7 @@ public class App {
     }
 
     /**
-     * OPERATION 7: Find person for editing
+     * 7) Find person for editing
      */
     public void findPersonForEdit(String patientId) {
         try {
@@ -242,7 +243,7 @@ public class App {
     }
 
     /**
-     * OPERATION 8: Find test for editing
+     * 8) Find test for editing
      */
     public void findTestForEdit(String testCodeStr) {
         try {
@@ -254,7 +255,7 @@ public class App {
                 result.append("ÚPRAVA PCR TESTU\n");
                 result.append("Aktuálne hodnoty:\n");
                 result.append("Kód: ").append(test.getTestCode()).append("\n");
-                result.append("ID pacienta: ").append(test.getTestCode()).append("\n");
+                result.append("ID pacienta: ").append(test.getPatientId()).append("\n");
                 result.append("Dátum a čas vykonania: ").append(test.getDateTime()).append("\n");
                 result.append("Výsledok: ").append(test.getResult() ? "POZITÍVNY" : "NEGATÍVNY").append("\n");
                 result.append("Hodnota: ").append(test.getValue()).append("\n");
